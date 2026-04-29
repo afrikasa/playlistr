@@ -27,7 +27,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from spotipy import SpotifyOAuth
@@ -271,6 +271,83 @@ def open_folder(folder: str = None):
         target = _DOWNLOADS_DIR
     subprocess.Popen(["explorer", str(target)])
     return {"ok": True}
+
+
+# ── Biblioteca local ──────────────────────────────────────────────
+@app.get("/library")
+def get_library():
+    from mutagen.id3 import ID3, ID3NoHeaderError
+    from mutagen.mp3 import MP3
+
+    tracks = []
+    for mp3_file in sorted(_DOWNLOADS_DIR.rglob("*.mp3")):
+        try:
+            rel_path = mp3_file.relative_to(_DOWNLOADS_DIR).as_posix()
+            duration_s = 0
+            try:
+                audio = MP3(str(mp3_file))
+                if audio.info:
+                    duration_s = int(audio.info.length)
+            except Exception:
+                pass
+
+            title = mp3_file.stem
+            artist = ""
+            album = ""
+            has_cover = False
+            try:
+                tags = ID3(str(mp3_file))
+                title = str(tags["TIT2"]) if "TIT2" in tags else title
+                artist = str(tags["TPE1"]) if "TPE1" in tags else ""
+                album = str(tags["TALB"]) if "TALB" in tags else ""
+                has_cover = any(k.startswith("APIC") for k in tags.keys())
+            except ID3NoHeaderError:
+                pass
+
+            tracks.append({
+                "path": rel_path,
+                "title": title,
+                "artist": artist,
+                "album": album,
+                "duration": f"{duration_s // 60}:{duration_s % 60:02d}",
+                "has_cover": has_cover,
+            })
+        except Exception:
+            pass
+
+    return {"tracks": tracks}
+
+
+@app.get("/files/{path:path}")
+def serve_file(path: str):
+    target = (_DOWNLOADS_DIR / path).resolve()
+    if not str(target).startswith(str(_DOWNLOADS_DIR.resolve())):
+        return Response(status_code=403)
+    if not target.exists() or not target.is_file():
+        return Response(status_code=404)
+    return FileResponse(str(target), media_type="audio/mpeg")
+
+
+@app.get("/cover/{path:path}")
+def serve_cover(path: str):
+    from mutagen.id3 import ID3, ID3NoHeaderError
+
+    target = (_DOWNLOADS_DIR / path).resolve()
+    if not str(target).startswith(str(_DOWNLOADS_DIR.resolve())):
+        return Response(status_code=403)
+    if not target.exists():
+        return Response(status_code=404)
+    try:
+        tags = ID3(str(target))
+        for key in tags.keys():
+            if key.startswith("APIC"):
+                apic = tags[key]
+                return Response(content=apic.data, media_type=apic.mime)
+    except ID3NoHeaderError:
+        pass
+    except Exception:
+        pass
+    return Response(status_code=404)
 
 
 # ── Frontend estático ────────────────────────────────────────────
