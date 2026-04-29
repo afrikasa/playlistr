@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## [1.1.2] - 2026-04-29
+
+### Adicionado
+- Favicon SVG verde com nota musical, título da aba alterado para "Playlistr"
+
+### Corrigido
+- Player: clicar noutra faixa mudava UI mas não o áudio (fix com key remount)
+- npm start abria duas janelas do browser (removido withVisualEdits do Emergent)
+
+### Removido
+- Badge "Made with Emergent" e tracking PostHog do index.html
+
+---
+
+## [1.1.1] - 2026-04-29
+
+### Adicionado
+- Playlists locais: criar, renomear, apagar
+- Adicionar e remover faixas de uma playlist com pesquisa
+- Persistência em `downloads/playlists.json`
+- Endpoints `/local-playlists` CRUD no backend
+
+---
+
+## [1.1.0] - 2026-04-29
+
+### Adicionado
+- Player de áudio global na barra inferior (play/pause, anterior/seguinte, scrubber, volume, fechar)
+- Vista Biblioteca com 4 modos: Todas, Artistas, Álbuns, Playlists
+- Modo Artistas: foto do Spotify em círculo, hierarquia Artista → Álbum → Faixas
+- Agrupamento por artista principal (features com outros artistas agrupam no artista principal)
+- Endpoints `/library`, `/files/{path}`, `/cover/{path}` para servir MP3s e capas locais
+- Endpoint `/artist-image` para ir buscar foto do artista ao Spotify (com cache)
+- Frontend migrado para repo único (`spotify-downloader/frontend/`)
+- `npm start` arranca backend (uvicorn --reload) + frontend (hot reload) em simultâneo
+
+---
+
 ## [1.0.0] - 2026-04-29
 
 ### Adicionado

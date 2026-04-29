@@ -1,6 +1,7 @@
 @echo off
 REM ─── Spotify Downloader ───────────────────────────────────────────
 set BACKEND_DIR=%~dp0backend
+set FRONTEND_DIR=%~dp0frontend
 set PYTHON=C:\Users\marcu\AppData\Local\Programs\Python\Python39\python.exe
 
 echo [1/3] A verificar dependencias do backend...
@@ -12,7 +13,6 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 "') do (
 )
 
 echo [3/3] A iniciar servidor em http://localhost:8000 ...
-echo       Abre o browser em: http://localhost:8000
 echo       (Ctrl+C para parar)
 echo.
 cd /d "%BACKEND_DIR%"

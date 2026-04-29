@@ -20,7 +20,7 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import spotipy
 import uvicorn
@@ -51,9 +51,7 @@ app.add_middleware(
 _DOWNLOADS_DIR = Path(__file__).parent.parent / "downloads"
 _DOWNLOADS_DIR.mkdir(exist_ok=True)
 
-FRONTEND_BUILD = (
-    Path(__file__).parent.parent.parent / "Spotify-Playlist-Downloader" / "frontend" / "build"
-)
+FRONTEND_BUILD = Path(__file__).parent.parent / "frontend" / "build"
 
 # ── OAuth Spotify ────────────────────────────────────────────────
 _REDIRECT_URI = "http://127.0.0.1:8000/callback"
@@ -245,6 +243,29 @@ async def progress_stream(request: Request):
     )
 
 
+_artist_image_cache: dict[str, str] = {}
+
+
+@app.get("/artist-image")
+def get_artist_image(name: str):
+    if name in _artist_image_cache:
+        return {"url": _artist_image_cache[name]}
+    sp = _get_sp_client()
+    if not sp:
+        return {"url": None}
+    try:
+        results = sp.search(q=f"artist:{name}", type="artist", limit=1)
+        items = results.get("artists", {}).get("items", [])
+        if items and items[0].get("images"):
+            url = items[0]["images"][0]["url"]
+            _artist_image_cache[name] = url
+            return {"url": url}
+    except Exception:
+        pass
+    _artist_image_cache[name] = None
+    return {"url": None}
+
+
 @app.get("/playlists")
 async def get_user_playlists():
     loop = asyncio.get_event_loop()
@@ -270,6 +291,74 @@ def open_folder(folder: str = None):
     if not target.exists():
         target = _DOWNLOADS_DIR
     subprocess.Popen(["explorer", str(target)])
+    return {"ok": True}
+
+
+# ── Playlists locais ──────────────────────────────────────────────
+_PLAYLISTS_FILE = _DOWNLOADS_DIR / "playlists.json"
+
+
+def _read_playlists() -> list:
+    if not _PLAYLISTS_FILE.exists():
+        return []
+    try:
+        return json.loads(_PLAYLISTS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _write_playlists(data: list) -> None:
+    _PLAYLISTS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class PlaylistCreate(BaseModel):
+    name: str
+
+
+class PlaylistUpdate(BaseModel):
+    name: Optional[str] = None
+    tracks: Optional[list[str]] = None
+
+
+@app.get("/local-playlists")
+def list_local_playlists():
+    return {"playlists": _read_playlists()}
+
+
+@app.post("/local-playlists")
+def create_local_playlist(body: PlaylistCreate):
+    import uuid, datetime
+    playlists = _read_playlists()
+    new = {
+        "id": str(uuid.uuid4()),
+        "name": body.name.strip(),
+        "created_at": datetime.datetime.utcnow().isoformat(),
+        "tracks": [],
+    }
+    playlists.append(new)
+    _write_playlists(playlists)
+    return new
+
+
+@app.put("/local-playlists/{pid}")
+def update_local_playlist(pid: str, body: PlaylistUpdate):
+    playlists = _read_playlists()
+    for p in playlists:
+        if p["id"] == pid:
+            if body.name is not None:
+                p["name"] = body.name.strip()
+            if body.tracks is not None:
+                p["tracks"] = body.tracks
+            _write_playlists(playlists)
+            return p
+    return Response(status_code=404)
+
+
+@app.delete("/local-playlists/{pid}")
+def delete_local_playlist(pid: str):
+    playlists = _read_playlists()
+    playlists = [p for p in playlists if p["id"] != pid]
+    _write_playlists(playlists)
     return {"ok": True}
 
 
