@@ -5,7 +5,11 @@
     "ghcr.io/devcontainers/features/python:1": { "version": "3.11" },
     "ghcr.io/devcontainers/features/node:1": { "version": "20" }
   },
-  "postCreateCommand": "pip install -r requirements.txt -r backend/requirements.txt && cd frontend && npm install --legacy-peer-deps && npm install -g @anthropic-ai/claude-code",
+  "postCreateCommand": "sudo apt-get install -y ffmpeg && pip install -r requirements.txt -r backend/requirements.txt && cd frontend && npm install --legacy-peer-deps && npm install -g @anthropic-ai/claude-code && cd .. && python seed_demo.py",
+  "remoteEnv": {
+    "YT_DLP_EXE": "yt-dlp",
+    "FFMPEG_PATH": "/usr/bin"
+  },
   "customizations": {
     "vscode": {
       "extensions": [

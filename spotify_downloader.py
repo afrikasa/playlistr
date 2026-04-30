@@ -76,12 +76,24 @@ AUDIO_QUALITY   = "192"                   # kbps do MP3 final
 SEARCH_RETRIES  = 3                       # tentativas de pesquisa no YouTube
 SLEEP_BETWEEN   = 1.5                     # segundos entre downloads (cortesia)
 
-FFMPEG_PATH = (
-    r"C:\Users\marcu\AppData\Local\Microsoft\WinGet\Packages"
-    r"\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
-    r"\ffmpeg-8.1-full_build\bin"
+def _detect_tool(env_var: str, windows_default: str, linux_cmd: str) -> str:
+    """Env var > default Windows > comando no PATH (Linux/Mac)."""
+    import platform, shutil
+    if val := os.getenv(env_var):
+        return val
+    if platform.system() == "Windows":
+        return windows_default
+    found = shutil.which(linux_cmd)
+    return found or linux_cmd
+
+FFMPEG_PATH = _detect_tool(
+    "FFMPEG_PATH",
+    (r"C:\Users\marcu\AppData\Local\Microsoft\WinGet\Packages"
+     r"\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
+     r"\ffmpeg-8.1-full_build\bin"),
+    "ffmpeg",
 )
-YT_DLP_EXE = r"C:\Users\marcu\yt-dlp-new.exe"
+YT_DLP_EXE = _detect_tool("YT_DLP_EXE", r"C:\Users\marcu\yt-dlp-new.exe", "yt-dlp")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -553,11 +565,13 @@ def download_as_mp3(
         "--extract-audio",
         "--audio-format", "mp3",
         "--audio-quality", AUDIO_QUALITY,
-        "--ffmpeg-location", FFMPEG_PATH,
         "--no-warnings",
         "-o", outtmpl,
         youtube_url,
     ]
+    # Só passa --ffmpeg-location se for um caminho explícito (não comando no PATH)
+    if len(FFMPEG_PATH) > 20 or "/" in FFMPEG_PATH or "\\" in FFMPEG_PATH:
+        cmd = cmd[:5] + ["--ffmpeg-location", FFMPEG_PATH] + cmd[5:]
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
