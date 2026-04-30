@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -37,6 +38,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import spotify_downloader as sd
+import db as _db
 
 app = FastAPI(title="Spotify Downloader API")
 
@@ -96,11 +98,63 @@ _loop: asyncio.AbstractEventLoop | None = None
 _queue: asyncio.Queue | None = None
 
 
+_auto_sync_lock = threading.Lock()
+
+
+def _run_auto_sync(playlist: dict) -> None:
+    if not _auto_sync_lock.acquire(blocking=False):
+        log.info("Sync já em curso, a saltar '%s'", playlist["name"])
+        return
+    try:
+        log.info("Auto-sync a iniciar: '%s'", playlist["name"])
+        tracks = sd.fetch_playlist_tracks(playlist["url"])
+        if not tracks:
+            _db.update_sync_result(playlist["id"], 0)
+            return
+        cancel = threading.Event()
+        new_tracks = 0
+
+        def _on_event(evt: dict) -> None:
+            nonlocal new_tracks
+            if evt.get("type") == "track_done" and evt.get("status") == "done":
+                new_tracks += 1
+
+        sd.run_download(
+            raw_tracks=tracks,
+            output_dir=_DOWNLOADS_DIR,
+            quality="192",
+            cancel_event=cancel,
+            on_event=_on_event,
+            library_keys=_db.get_track_keys(),
+        )
+        _db.scan_and_index(_DOWNLOADS_DIR)
+        _db.update_sync_result(playlist["id"], new_tracks)
+        log.info("Auto-sync concluído '%s': %d faixas novas", playlist["name"], new_tracks)
+    except Exception as exc:
+        log.error("Erro ao sincronizar '%s': %s", playlist["name"], exc)
+    finally:
+        _auto_sync_lock.release()
+
+
+def _sync_scheduler_loop() -> None:
+    while True:
+        time.sleep(3600)
+        try:
+            due = _db.get_sync_playlists_due()
+            for pl in due:
+                threading.Thread(target=_run_auto_sync, args=(pl,), daemon=True).start()
+        except Exception as exc:
+            log.error("Erro no scheduler de sync: %s", exc)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     global _loop, _queue
     _loop = asyncio.get_event_loop()
     _queue = asyncio.Queue()
+    _db.init_db(_DOWNLOADS_DIR / "library.db")
+    threading.Thread(target=lambda: _db.scan_and_index(_DOWNLOADS_DIR), daemon=True).start()
+    threading.Thread(target=_sync_scheduler_loop, daemon=True).start()
 
 
 # ── Modelos ──────────────────────────────────────────────────────
@@ -214,7 +268,9 @@ def start_download(req: DownloadRequest):
             quality=req.quality,
             cancel_event=_cancel,
             on_event=_emit,
+            library_keys=_db.get_track_keys(),
         )
+        _db.scan_and_index(_DOWNLOADS_DIR)
 
     threading.Thread(target=_worker, daemon=True).start()
     return {"tracks": tracks, "total": len(tracks)}
@@ -362,49 +418,68 @@ def delete_local_playlist(pid: str):
     return {"ok": True}
 
 
+# ── Sync agendado ────────────────────────────────────────────────
+class SyncPlaylistBody(BaseModel):
+    id: str
+    name: str
+    url: str
+    image: Optional[str] = None
+    auto_sync: bool = False
+    interval_h: int = 24
+
+
+class SyncPlaylistUpdate(BaseModel):
+    auto_sync: Optional[bool] = None
+    interval_h: Optional[int] = None
+
+
+@app.get("/sync-playlists")
+def list_sync_playlists():
+    return {"playlists": _db.get_sync_playlists()}
+
+
+@app.post("/sync-playlists")
+def add_sync_playlist(body: SyncPlaylistBody):
+    return _db.upsert_sync_playlist(
+        body.id, body.name, body.url, body.image, int(body.auto_sync), body.interval_h
+    )
+
+
+@app.put("/sync-playlists/{pid}")
+def update_sync_playlist(pid: str, body: SyncPlaylistUpdate):
+    pl = _db.get_sync_playlist(pid)
+    if not pl:
+        return Response(status_code=404)
+    auto_sync = int(body.auto_sync) if body.auto_sync is not None else pl["auto_sync"]
+    interval_h = body.interval_h if body.interval_h is not None else pl["interval_h"]
+    return _db.upsert_sync_playlist(pl["id"], pl["name"], pl["url"], pl["image"], auto_sync, interval_h)
+
+
+@app.delete("/sync-playlists/{pid}")
+def delete_sync_playlist_endpoint(pid: str):
+    _db.delete_sync_playlist(pid)
+    return {"ok": True}
+
+
+@app.post("/sync-playlists/{pid}/sync")
+def trigger_sync(pid: str):
+    pl = _db.get_sync_playlist(pid)
+    if not pl:
+        return Response(status_code=404)
+    threading.Thread(target=_run_auto_sync, args=(pl,), daemon=True).start()
+    return {"ok": True}
+
+
 # ── Biblioteca local ──────────────────────────────────────────────
 @app.get("/library")
 def get_library():
-    from mutagen.id3 import ID3, ID3NoHeaderError
-    from mutagen.mp3 import MP3
+    return {"tracks": _db.get_all_tracks()}
 
-    tracks = []
-    for mp3_file in sorted(_DOWNLOADS_DIR.rglob("*.mp3")):
-        try:
-            rel_path = mp3_file.relative_to(_DOWNLOADS_DIR).as_posix()
-            duration_s = 0
-            try:
-                audio = MP3(str(mp3_file))
-                if audio.info:
-                    duration_s = int(audio.info.length)
-            except Exception:
-                pass
 
-            title = mp3_file.stem
-            artist = ""
-            album = ""
-            has_cover = False
-            try:
-                tags = ID3(str(mp3_file))
-                title = str(tags["TIT2"]) if "TIT2" in tags else title
-                artist = str(tags["TPE1"]) if "TPE1" in tags else ""
-                album = str(tags["TALB"]) if "TALB" in tags else ""
-                has_cover = any(k.startswith("APIC") for k in tags.keys())
-            except ID3NoHeaderError:
-                pass
-
-            tracks.append({
-                "path": rel_path,
-                "title": title,
-                "artist": artist,
-                "album": album,
-                "duration": f"{duration_s // 60}:{duration_s % 60:02d}",
-                "has_cover": has_cover,
-            })
-        except Exception:
-            pass
-
-    return {"tracks": tracks}
+@app.post("/library/scan")
+def scan_library():
+    threading.Thread(target=lambda: _db.scan_and_index(_DOWNLOADS_DIR), daemon=True).start()
+    return {"ok": True}
 
 
 @app.get("/files/{path:path}")
@@ -449,7 +524,10 @@ if FRONTEND_BUILD.exists():
 
     @app.get("/")
     async def serve_root():
-        return FileResponse(str(FRONTEND_BUILD / "index.html"))
+        return FileResponse(
+            str(FRONTEND_BUILD / "index.html"),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/{full_path:path}")
     async def serve_react(full_path: str):

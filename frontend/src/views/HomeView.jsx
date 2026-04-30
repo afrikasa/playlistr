@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     Link2,
     ClipboardPaste,
@@ -7,6 +7,10 @@ import {
     Music2,
     Sparkles,
     Library,
+    RefreshCw,
+    Trash2,
+    Plus,
+    RotateCcw,
 } from "lucide-react";
 import {
     Select,
@@ -25,6 +29,11 @@ export const HomeView = ({ onStart }) => {
     const [loadingPlaylists, setLoadingPlaylists] = useState(true);
     const [selectedId, setSelectedId] = useState("");
 
+    // ── sync state ─────────────────────────────────────────────────
+    const [syncPlaylists, setSyncPlaylists] = useState([]);
+    const [syncing, setSyncing] = useState(new Set());
+    const pollRef = useRef(null);
+
     useEffect(() => {
         axios.get("/playlists")
             .then((res) => {
@@ -34,7 +43,19 @@ export const HomeView = ({ onStart }) => {
             })
             .catch(() => {})
             .finally(() => setLoadingPlaylists(false));
+
+        loadSync();
+
+        return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    const loadSync = async () => {
+        try {
+            const res = await axios.get("/sync-playlists");
+            setSyncPlaylists(res.data.playlists || []);
+        } catch (_) {}
+    };
 
     const handlePlaylistSelect = (id) => {
         setSelectedId(id);
@@ -50,8 +71,62 @@ export const HomeView = ({ onStart }) => {
                 setSelectedId("");
             }
         } catch {
-            // clipboard inaccessível
+            // clipboard inacessível
         }
+    };
+
+    const selectedPlaylist = playlists.find((p) => p.id === selectedId) || null;
+    const isSaved = selectedPlaylist && syncPlaylists.some((p) => p.id === selectedPlaylist.id);
+
+    const handleSaveSync = async () => {
+        if (!selectedPlaylist) return;
+        await axios.post("/sync-playlists", {
+            id: selectedPlaylist.id,
+            name: selectedPlaylist.name,
+            url: selectedPlaylist.url,
+            image: selectedPlaylist.image || null,
+        }).catch(() => {});
+        loadSync();
+    };
+
+    const handleDeleteSync = async (id) => {
+        await axios.delete(`/sync-playlists/${id}`).catch(() => {});
+        setSyncPlaylists((prev) => prev.filter((p) => p.id !== id));
+    };
+
+    const handleToggleAutoSync = async (pl) => {
+        await axios.put(`/sync-playlists/${pl.id}`, { auto_sync: !pl.auto_sync }).catch(() => {});
+        loadSync();
+    };
+
+    const handleIntervalChange = async (pl, interval_h) => {
+        await axios.put(`/sync-playlists/${pl.id}`, { interval_h: parseInt(interval_h) }).catch(() => {});
+        loadSync();
+    };
+
+    const handleSyncNow = async (pl) => {
+        if (syncing.has(pl.id)) return;
+        setSyncing((prev) => new Set([...prev, pl.id]));
+        await axios.post(`/sync-playlists/${pl.id}/sync`).catch(() => {});
+        const started = Date.now();
+        const origSync = pl.last_sync;
+        const iv = setInterval(async () => {
+            if (Date.now() - started > 600000) {
+                clearInterval(iv);
+                setSyncing((prev) => { const s = new Set(prev); s.delete(pl.id); return s; });
+                return;
+            }
+            try {
+                const res = await axios.get("/sync-playlists");
+                const updated = (res.data.playlists || []).find((p) => p.id === pl.id);
+                if (updated && updated.last_sync !== origSync) {
+                    setSyncPlaylists(res.data.playlists || []);
+                    setSyncing((prev) => { const s = new Set(prev); s.delete(pl.id); return s; });
+                    clearInterval(iv);
+                }
+            } catch (_) {}
+        }, 5000);
+        pollRef.current = iv;
     };
 
     const isValid = url.trim().length > 10;
@@ -214,6 +289,92 @@ export const HomeView = ({ onStart }) => {
                     <Download className="w-5 h-5 transition-transform group-hover:translate-y-0.5" />
                     <span className="text-base tracking-wide">Start Download</span>
                 </button>
+            </div>
+
+            {/* ── Playlists Guardadas ──────────────────────────────── */}
+            <div className="space-y-4 pt-2 border-t border-white/10">
+                <div className="flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-[0.2em] font-bold text-neutral-400 flex items-center gap-2">
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        Playlists Guardadas
+                    </span>
+                    {selectedPlaylist && !isSaved && (
+                        <button
+                            onClick={handleSaveSync}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1DB954]/10 text-[#1DB954] hover:bg-[#1DB954]/20 text-xs font-medium transition-colors"
+                        >
+                            <Plus className="w-3.5 h-3.5" />
+                            Guardar "{selectedPlaylist.name}"
+                        </button>
+                    )}
+                </div>
+
+                {syncPlaylists.length === 0 ? (
+                    <p className="text-sm text-neutral-600 py-1">
+                        Selecciona uma playlist e clica "Guardar" para activar o sync automático.
+                    </p>
+                ) : (
+                    <div className="space-y-2">
+                        {syncPlaylists.map((pl) => {
+                            const lastSyncLabel = pl.last_sync
+                                ? `Último sync: ${new Date(pl.last_sync + "Z").toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}${pl.last_count > 0 ? ` · ${pl.last_count} nova${pl.last_count !== 1 ? "s" : ""}` : " · sem novidades"}`
+                                : "Nunca sincronizado";
+                            const isSyncing = syncing.has(pl.id);
+
+                            return (
+                                <div key={pl.id} className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/10 hover:border-white/20 transition-colors">
+                                    {pl.image ? (
+                                        <img src={pl.image} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
+                                    ) : (
+                                        <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center flex-shrink-0">
+                                            <Library className="w-4 h-4 text-neutral-600" />
+                                        </div>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-medium truncate">{pl.name}</p>
+                                        <p className="text-xs text-neutral-500 truncate mt-0.5">{lastSyncLabel}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                        {pl.auto_sync ? (
+                                            <select
+                                                value={pl.interval_h}
+                                                onChange={(e) => handleIntervalChange(pl, e.target.value)}
+                                                className="bg-[#121212] border border-white/10 rounded-lg px-2 py-1 text-xs text-neutral-300 focus:outline-none"
+                                            >
+                                                <option value={6}>6h</option>
+                                                <option value={12}>12h</option>
+                                                <option value={24}>24h</option>
+                                                <option value={48}>48h</option>
+                                            </select>
+                                        ) : null}
+                                        <button
+                                            onClick={() => handleToggleAutoSync(pl)}
+                                            title={pl.auto_sync ? "Desactivar auto-sync" : "Activar auto-sync"}
+                                            className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${pl.auto_sync ? "bg-[#1DB954]" : "bg-white/10"}`}
+                                        >
+                                            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${pl.auto_sync ? "translate-x-4" : "translate-x-0.5"}`} />
+                                        </button>
+                                        <button
+                                            onClick={() => handleSyncNow(pl)}
+                                            disabled={isSyncing}
+                                            title="Sincronizar agora"
+                                            className="p-1.5 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white transition-colors disabled:opacity-40"
+                                        >
+                                            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-[#1DB954]" : ""}`} />
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeleteSync(pl.id)}
+                                            title="Remover"
+                                            className="p-1.5 rounded-lg hover:bg-red-500/10 text-neutral-600 hover:text-red-400 transition-colors"
+                                        >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
         </div>
     );

@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## [1.2.0] - 2026-04-30
+
+### Adicionado
+- SQLite (`downloads/library.db`) para indexar biblioteca — `/library` instantâneo, sem varrer ficheiros a cada chamada
+- Scan automático no arranque do servidor + após cada download
+- Endpoint `POST /library/scan` para re-scan manual
+- Sync inteligente: ao descarregar, verifica DB por título+artista antes de ir ao YouTube
+- Auto-sync agendado: playlists guardadas com toggle on/off, intervalo configurável (6h/12h/24h/48h)
+- Endpoints CRUD `/sync-playlists` + `POST /sync-playlists/{id}/sync`
+- Secção "Playlists Guardadas" na tab Download com botão Guardar, Sync agora, Remover
+- `start.bat` recompila sempre o frontend e abre o browser automaticamente
+- Header `Cache-Control: no-cache` no `index.html` para evitar browser cache após actualizações
+
+---
+
 ## [1.1.2] - 2026-04-29
 
 ### Adicionado

@@ -10,11 +10,11 @@
 - [x] Playlists locais — criar, renomear, apagar, adicionar/remover faixas
 - [x] Frontend migrado para repo único, npm start arranca tudo
 
-## Próximo (v1.2.0)
+## Concluído (v1.2.0)
 
-- [ ] SQLite para persistência local (biblioteca indexada, histórico)
-- [ ] Sync inteligente — ao descarregar playlist Spotify, saltar faixas já existentes localmente
-- [ ] Auto-sync agendado — verificar playlists Spotify e descarregar novas faixas automaticamente
+- [x] SQLite para persistência local (biblioteca indexada)
+- [x] Sync inteligente — salta faixas já existentes no DB por título+artista
+- [x] Auto-sync agendado — playlists guardadas com intervalo configurável e sync manual
 
 ## Futuro (v2.0.0)
 

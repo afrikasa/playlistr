@@ -674,6 +674,7 @@ def run_download(
     quality: str,
     cancel_event: threading.Event,
     on_event: Callable[[dict], None],
+    library_keys: Optional[set] = None,
 ) -> None:
     """Pipeline de download chamado pelo backend FastAPI."""
     global OUTPUT_DIR, AUDIO_QUALITY
@@ -689,6 +690,13 @@ def run_download(
             return
 
         on_event({"type": "track_start", "index": idx, "current": idx + 1, "total": total})
+
+        # Verificar no DB por título+artista (mais fiável que só o path)
+        track_key = f"{track['title'].lower()}|{track['artist'].lower()}"
+        if library_keys and track_key in library_keys:
+            skipped += 1
+            on_event({"type": "track_done", "index": idx, "status": "skipped", "current": idx + 1, "total": total})
+            continue
 
         out_path = build_output_path(track["artist"], track["album"], track["title"])
         if out_path.exists():
