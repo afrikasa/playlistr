@@ -1,0 +1,16 @@
+[Unit]
+Description=Playlistr — Spotify to MP3
+After=network.target
+
+[Service]
+Type=simple
+User=playlistr
+WorkingDirectory=/opt/playlistr
+Environment="YT_DLP_EXE=yt-dlp"
+Environment="FFMPEG_PATH=/usr/bin"
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir backend/
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
