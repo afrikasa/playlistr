@@ -188,7 +188,7 @@ export default function App() {
                 }}
             />
 
-            <div className="w-full max-w-3xl relative z-10" style={{ minWidth: "min(700px, 100%)" }}>
+            <div className="w-full max-w-3xl relative z-10">
                 {/* App chrome */}
                 <header className="flex items-center justify-between mb-5 px-1">
                     <div className="flex items-center gap-2.5">

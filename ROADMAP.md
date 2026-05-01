@@ -16,10 +16,16 @@
 - [x] Sync inteligente — salta faixas já existentes no DB por título+artista
 - [x] Auto-sync agendado — playlists guardadas com intervalo configurável e sync manual
 
-## Futuro (v2.0.0)
+## Concluído (v1.x)
 
-- [ ] Vista por artista e album com navegacao
-- [ ] Fila de reproducao com drag & drop
-- [ ] Shuffle e repeat
-- [ ] UI mobile-friendly
-- [ ] Importar playlists locais do Windows Media Player / iTunes
+- [x] Vista por artista e álbum com navegação (drill-down Artista → Álbum → Faixas)
+
+## Concluído (v2.0.0)
+
+- [x] Shuffle e repeat
+- [x] Fila de reprodução com drag & drop
+- [x] UI mobile-friendly
+
+## Futuro (comercial / v3.0.0)
+
+- [ ] Importar playlists do Windows Media Player / iTunes

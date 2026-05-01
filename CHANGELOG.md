@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [2.0.0] - 2026-05-01
+
+### Adicionado
+- Shuffle: baralha a fila de reprodução mantendo a faixa actual em primeiro; botão fica verde quando activo
+- Repeat: cicla entre desligado → repetir tudo → repetir uma faixa; ícone `Repeat1` quando em modo "uma faixa"
+- Fila de reprodução: painel deslizante acima do player com todas as faixas em ordem
+- Drag & drop na fila para reordenar faixas; clique para saltar directamente para uma faixa
+- Faixa actual destacada a verde com animação de barras na fila
+- UI mobile-friendly: layout responsivo para ecrãs pequenos
+  - Player: track info mais estreita, volume slider oculto em mobile
+  - ModeToggle: labels abreviados em mobile (All/Art./Álb./PL)
+  - Sync cards: wrap em mobile para não sobrepor botões ao nome
+  - Removido `minWidth` fixo que bloqueava layouts estreitos
+
+---
+
 ## [1.2.0] - 2026-04-30
 
 ### Adicionado

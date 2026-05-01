@@ -322,19 +322,21 @@ export const HomeView = ({ onStart }) => {
                             const isSyncing = syncing.has(pl.id);
 
                             return (
-                                <div key={pl.id} className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/10 hover:border-white/20 transition-colors">
-                                    {pl.image ? (
-                                        <img src={pl.image} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
-                                    ) : (
-                                        <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center flex-shrink-0">
-                                            <Library className="w-4 h-4 text-neutral-600" />
+                                <div key={pl.id} className="flex flex-wrap items-center gap-2 p-3 rounded-xl bg-white/[0.03] border border-white/10 hover:border-white/20 transition-colors">
+                                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                                        {pl.image ? (
+                                            <img src={pl.image} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
+                                        ) : (
+                                            <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center flex-shrink-0">
+                                                <Library className="w-4 h-4 text-neutral-600" />
+                                            </div>
+                                        )}
+                                        <div className="min-w-0">
+                                            <p className="text-sm font-medium truncate">{pl.name}</p>
+                                            <p className="text-xs text-neutral-500 truncate mt-0.5">{lastSyncLabel}</p>
                                         </div>
-                                    )}
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium truncate">{pl.name}</p>
-                                        <p className="text-xs text-neutral-500 truncate mt-0.5">{lastSyncLabel}</p>
                                     </div>
-                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                    <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
                                         {pl.auto_sync ? (
                                             <select
                                                 value={pl.interval_h}

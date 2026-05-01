@@ -365,10 +365,10 @@ function EmptyState() {
 
 function ModeToggle({ mode, setMode }) {
     const tabs = [
-        { key: "all",      label: "Todas",    icon: <Music2 className="w-3.5 h-3.5" /> },
-        { key: "artists",  label: "Artistas", icon: <Mic2 className="w-3.5 h-3.5" /> },
-        { key: "albums",   label: "Álbuns",   icon: <Disc3 className="w-3.5 h-3.5" /> },
-        { key: "playlists",label: "Playlists",icon: <ListMusic className="w-3.5 h-3.5" /> },
+        { key: "all",      label: "Todas",    short: "All",  icon: <Music2 className="w-3.5 h-3.5" /> },
+        { key: "artists",  label: "Artistas", short: "Art.", icon: <Mic2 className="w-3.5 h-3.5" /> },
+        { key: "albums",   label: "Álbuns",   short: "Álb.", icon: <Disc3 className="w-3.5 h-3.5" /> },
+        { key: "playlists",label: "Playlists",short: "PL",   icon: <ListMusic className="w-3.5 h-3.5" /> },
     ];
     return (
         <div className="flex gap-1 bg-white/[0.04] rounded-xl p-1 border border-white/10">
@@ -381,7 +381,8 @@ function ModeToggle({ mode, setMode }) {
                     }`}
                 >
                     {t.icon}
-                    {t.label}
+                    <span className="hidden sm:inline">{t.label}</span>
+                    <span className="sm:hidden">{t.short}</span>
                 </button>
             ))}
         </div>
