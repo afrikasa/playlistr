@@ -37,6 +37,12 @@ def main():
 
     added = 0
     for path, title, artist, album, duration, has_cover in DEMO_TRACKS:
+        # Criar ficheiro dummy para o scan não apagar a entrada da DB
+        full_path = DOWNLOADS_DIR / path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        if not full_path.exists():
+            full_path.touch()
+
         if path in existing:
             continue
         _db.upsert_track(path, title, artist, album, duration, has_cover)
