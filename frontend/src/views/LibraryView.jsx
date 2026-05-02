@@ -1,37 +1,64 @@
 import { useEffect, useRef, useState } from "react";
-import { Music2, Play, RefreshCw, ListMusic, Mic2, Disc3, ChevronDown, ChevronRight } from "lucide-react";
+import { Heart, ListEnd, ListMusic, Mic2, MoreHorizontal, Music2, Play, RefreshCw, Disc3, ChevronDown, ChevronRight } from "lucide-react";
 import axios from "axios";
 import { PlaylistsView } from "./PlaylistsView";
 
-export function LibraryView({ onPlay }) {
-    const [mode, setMode] = useState("all"); // all | artists | albums | playlists
+export function LibraryView({ onPlay, onAddToQueue }) {
+    const [mode, setMode] = useState("all");
     const [tracks, setTracks] = useState([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [openGroup, setOpenGroup] = useState(null);
     const [artistImages, setArtistImages] = useState({});
+    const [likedSet, setLikedSet] = useState(new Set());
+    const [likedOnly, setLikedOnly] = useState(false);
+    const [recentTracks, setRecentTracks] = useState([]);
+    const [mostPlayed, setMostPlayed] = useState([]);
+    const [sortBy, setSortBy] = useState("artist");
     const fetchedArtists = useRef(new Set());
 
     const load = async () => {
         setLoading(true);
         try {
-            const res = await axios.get("/library");
-            setTracks(res.data.tracks || []);
+            const [libRes, recRes, topRes] = await Promise.all([
+                axios.get("/library"),
+                axios.get("/library/recently-played"),
+                axios.get("/library/most-played"),
+            ]);
+            const t = libRes.data.tracks || [];
+            setTracks(t);
+            setLikedSet(new Set(t.filter(x => x.liked).map(x => x.path)));
+            setRecentTracks(recRes.data.tracks || []);
+            setMostPlayed(topRes.data.tracks || []);
         } catch (_) {}
         setLoading(false);
     };
 
     useEffect(() => { load(); }, []);
-    // Reset grupo aberto ao mudar de modo
-    useEffect(() => { setOpenGroup(null); setSearch(""); }, [mode]);
+    useEffect(() => { setOpenGroup(null); setSearch(""); setLikedOnly(false); }, [mode]);
+
+    const toggleLike = async (path, e) => {
+        e?.stopPropagation();
+        const next = !likedSet.has(path);
+        setLikedSet(prev => {
+            const s = new Set(prev);
+            if (next) s.add(path); else s.delete(path);
+            return s;
+        });
+        try { await axios.patch("/library/like", { path, liked: next }); } catch (_) {}
+    };
 
     const filtered = tracks.filter((t) => {
         const q = search.toLowerCase();
-        return (
-            t.title.toLowerCase().includes(q) ||
-            t.artist.toLowerCase().includes(q) ||
-            t.album.toLowerCase().includes(q)
-        );
+        const matchSearch = t.title.toLowerCase().includes(q) || t.artist.toLowerCase().includes(q) || t.album.toLowerCase().includes(q);
+        return matchSearch && (!likedOnly || likedSet.has(t.path));
+    });
+
+    const sorted = [...filtered].sort((a, b) => {
+        if (sortBy === "title") return a.title.localeCompare(b.title);
+        if (sortBy === "plays") return (b.play_count || 0) - (a.play_count || 0);
+        if (sortBy === "recent") return (b.added_at || "").localeCompare(a.added_at || "");
+        return (a.artist || "").localeCompare(b.artist || "") || (a.album || "").localeCompare(b.album || "") || a.title.localeCompare(b.title);
     });
 
     if (loading) {
@@ -55,7 +82,6 @@ export function LibraryView({ onPlay }) {
         const groups = groupBy(tracks, (t) => primaryArtist(t.artist));
         const filteredGroups = filterGroups(groups, search);
 
-        // Buscar imagens dos artistas visíveis (lazy, sem repetir)
         Object.keys(filteredGroups).forEach((name) => {
             if (!fetchedArtists.current.has(name)) {
                 fetchedArtists.current.add(name);
@@ -75,6 +101,9 @@ export function LibraryView({ onPlay }) {
                     openGroup={openGroup}
                     setOpenGroup={setOpenGroup}
                     onPlay={onPlay}
+                    onAddToQueue={onAddToQueue}
+                    likedSet={likedSet}
+                    onToggleLike={toggleLike}
                     icon={<Mic2 className="w-4 h-4 text-neutral-500" />}
                     subLabel={(t) => t.album}
                     groupImages={artistImages}
@@ -97,6 +126,9 @@ export function LibraryView({ onPlay }) {
                     openGroup={openGroup}
                     setOpenGroup={setOpenGroup}
                     onPlay={onPlay}
+                    onAddToQueue={onAddToQueue}
+                    likedSet={likedSet}
+                    onToggleLike={toggleLike}
                     icon={<Disc3 className="w-4 h-4 text-neutral-500" />}
                     subLabel={(t) => t.artist}
                     showCover
@@ -105,15 +137,55 @@ export function LibraryView({ onPlay }) {
         );
     }
 
-    // ── modo "all" ───────────────────────────────────────────────
+    // ── modo "all" ─────────────────────────────────────────────────
     return (
         <div className="space-y-4 fade-up">
             <ModeToggle mode={mode} setMode={setMode} />
+            {recentTracks.length > 0 && (
+                <HorizontalSection title="Recentes" tracks={recentTracks} onPlay={(t) => onPlay([t], 0)} />
+            )}
+            {mostPlayed.length > 0 && (
+                <HorizontalSection title="Mais ouvidas" tracks={mostPlayed} onPlay={(t) => onPlay([t], 0)} />
+            )}
             <div className="flex items-center justify-between">
-                <span className="text-xs text-neutral-500">{tracks.length} faixas</span>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-neutral-500">{tracks.length} faixas</span>
+                    {likedSet.size > 0 && (
+                        <button
+                            onClick={() => setLikedOnly(l => !l)}
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border transition-all ${likedOnly ? "border-red-500/60 bg-red-500/10 text-red-400" : "border-white/10 text-neutral-500 hover:text-white"}`}
+                        >
+                            <Heart className={`w-3 h-3 ${likedOnly ? "fill-red-500 text-red-500" : ""}`} />
+                            {likedOnly ? "Favoritas" : `${likedSet.size} ♥`}
+                        </button>
+                    )}
+                </div>
                 <button onClick={load} className="p-1.5 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white transition-colors" title="Atualizar">
                     <RefreshCw className="w-4 h-4" />
                 </button>
+            </div>
+
+            {/* Ordenação */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] text-neutral-600">Ordenar:</span>
+                {[
+                    { key: "artist",  label: "Artista" },
+                    { key: "title",   label: "A-Z" },
+                    { key: "plays",   label: "Reproduções" },
+                    { key: "recent",  label: "Recentes" },
+                ].map((s) => (
+                    <button
+                        key={s.key}
+                        onClick={() => setSortBy(s.key)}
+                        className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-all ${
+                            sortBy === s.key
+                                ? "border-[#1DB954]/60 bg-[#1DB954]/10 text-[#1DB954]"
+                                : "border-white/10 text-neutral-600 hover:text-white"
+                        }`}
+                    >
+                        {s.label}
+                    </button>
+                ))}
             </div>
 
             {tracks.length === 0 ? (
@@ -121,12 +193,19 @@ export function LibraryView({ onPlay }) {
             ) : (
                 <>
                     <SearchBox value={search} onChange={setSearch} placeholder="Pesquisar título, artista ou álbum…" />
-                    {filtered.length === 0 ? (
-                        <p className="text-center text-sm text-neutral-500 py-8">Sem resultados para &ldquo;{search}&rdquo;</p>
+                    {sorted.length === 0 ? (
+                        <p className="text-center text-sm text-neutral-500 py-8">Sem resultados para &ldquo;{search || "favoritas"}&rdquo;</p>
                     ) : (
                         <div className="space-y-0.5 max-h-[460px] overflow-y-auto thin-scroll pr-1">
-                            {filtered.map((track, i) => (
-                                <LibraryRow key={track.path} track={track} onPlay={() => onPlay(filtered, i)} />
+                            {sorted.map((track, i) => (
+                                <LibraryRow
+                                    key={track.path}
+                                    track={track}
+                                    liked={likedSet.has(track.path)}
+                                    onPlay={() => onPlay(sorted, i)}
+                                    onAddToQueue={onAddToQueue ? () => onAddToQueue([track]) : null}
+                                    onToggleLike={(e) => toggleLike(track.path, e)}
+                                />
                             ))}
                         </div>
                     )}
@@ -136,7 +215,7 @@ export function LibraryView({ onPlay }) {
     );
 }
 
-// ── helpers ──────────────────────────────────────────────────────
+// ── helpers ────────────────────────────────────────────────────────
 
 function primaryArtist(artist) {
     if (!artist) return "Artista desconhecido";
@@ -163,7 +242,72 @@ function filterGroups(groups, search) {
     );
 }
 
-// ── subcomponentes ────────────────────────────────────────────────
+// ── Context menu ───────────────────────────────────────────────────
+
+function TrackMenu({ liked, onToggleLike, onAddToQueue, onClose, path }) {
+    const ref = useRef(null);
+    const [playlists, setPlaylists] = useState([]);
+    const [showPlaylists, setShowPlaylists] = useState(false);
+
+    useEffect(() => {
+        axios.get("/local-playlists").then((r) => setPlaylists(r.data.playlists || [])).catch(() => {});
+    }, []);
+
+    useEffect(() => {
+        const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+        document.addEventListener("mousedown", handler);
+        return () => document.removeEventListener("mousedown", handler);
+    }, [onClose]);
+
+    const addToPlaylist = async (pl) => {
+        if (!path || pl.tracks.includes(path)) return;
+        await axios.put(`/local-playlists/${pl.id}`, { tracks: [...pl.tracks, path] }).catch(() => {});
+        onClose();
+    };
+
+    return (
+        <div ref={ref} className="absolute right-0 top-full mt-1 z-50 bg-[#282828] border border-white/10 rounded-xl shadow-2xl py-1 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
+            {onAddToQueue && (
+                <button onClick={() => { onAddToQueue(); onClose(); }}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-white/5 transition-colors text-left">
+                    <ListEnd className="w-4 h-4 text-neutral-400" />
+                    Adicionar à fila
+                </button>
+            )}
+            <button onClick={() => { onToggleLike(); onClose(); }}
+                className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-white/5 transition-colors text-left">
+                <Heart className={`w-4 h-4 ${liked ? "fill-red-500 text-red-500" : "text-neutral-400"}`} />
+                {liked ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+            </button>
+            {playlists.length > 0 && (
+                <div className="border-t border-white/10 mt-1 pt-1">
+                    <button
+                        onClick={() => setShowPlaylists((s) => !s)}
+                        className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-white/5 transition-colors text-left"
+                    >
+                        <ListMusic className="w-4 h-4 text-neutral-400" />
+                        Adicionar à playlist
+                    </button>
+                    {showPlaylists && (
+                        <div className="pl-3 pb-1">
+                            {playlists.map((pl) => (
+                                <button
+                                    key={pl.id}
+                                    onClick={() => addToPlaylist(pl)}
+                                    className="w-full flex items-center px-3 py-1.5 text-xs hover:bg-white/5 transition-colors text-left text-neutral-300 hover:text-white truncate"
+                                >
+                                    {pl.name}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── subcomponentes ─────────────────────────────────────────────────
 
 function GroupHeader({ label, count, onRefresh }) {
     return (
@@ -188,7 +332,7 @@ function SearchBox({ value, onChange, placeholder }) {
     );
 }
 
-function GroupedList({ groups, openGroup, setOpenGroup, onPlay, icon, subLabel, showCover, groupImages, roundedImage }) {
+function GroupedList({ groups, openGroup, setOpenGroup, onPlay, onAddToQueue, likedSet, onToggleLike, icon, subLabel, showCover, groupImages, roundedImage }) {
     const [openAlbum, setOpenAlbum] = useState(null);
     const entries = Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
 
@@ -202,11 +346,7 @@ function GroupedList({ groups, openGroup, setOpenGroup, onPlay, icon, subLabel, 
                 const externalImg = groupImages?.[groupName];
                 const imgClass = `w-full h-full object-cover ${roundedImage ? "rounded-full" : ""}`;
                 const containerClass = `w-10 h-10 overflow-hidden bg-white/5 flex items-center justify-center flex-shrink-0 ${roundedImage ? "rounded-full" : "rounded-lg"}`;
-
-                // Dentro do artista: agrupar por álbum
-                const albumGroups = roundedImage
-                    ? groupBy(groupTracks, (t) => t.album || "Álbum desconhecido")
-                    : null;
+                const albumGroups = roundedImage ? groupBy(groupTracks, (t) => t.album || "Álbum desconhecido") : null;
 
                 return (
                     <div key={groupName}>
@@ -233,7 +373,6 @@ function GroupedList({ groups, openGroup, setOpenGroup, onPlay, icon, subLabel, 
                                 <button
                                     onClick={(e) => { e.stopPropagation(); onPlay(groupTracks, 0); }}
                                     className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg bg-[#1DB954]/10 text-[#1DB954] hover:bg-[#1DB954]/20 transition-all"
-                                    title="Reproduzir tudo"
                                 >
                                     <Play className="w-3.5 h-3.5 fill-current" />
                                 </button>
@@ -243,7 +382,6 @@ function GroupedList({ groups, openGroup, setOpenGroup, onPlay, icon, subLabel, 
 
                         {isOpen && (
                             <div className="ml-4 border-l border-white/5 pl-3 space-y-0.5 mb-1">
-                                {/* Artistas: sub-agrupa por álbum */}
                                 {roundedImage && albumGroups
                                     ? Object.entries(albumGroups).sort(([a], [b]) => a.localeCompare(b)).map(([albumName, albumTracks]) => {
                                         const albumOpen = openAlbum === `${groupName}::${albumName}`;
@@ -276,7 +414,14 @@ function GroupedList({ groups, openGroup, setOpenGroup, onPlay, icon, subLabel, 
                                                 {albumOpen && (
                                                     <div className="ml-4 border-l border-white/5 pl-3 space-y-0.5 mb-1">
                                                         {albumTracks.map((track, i) => (
-                                                            <TrackRow key={track.path} track={track} onPlay={() => onPlay(albumTracks, i)} />
+                                                            <TrackRow
+                                                                key={track.path}
+                                                                track={track}
+                                                                liked={likedSet?.has(track.path)}
+                                                                onPlay={() => onPlay(albumTracks, i)}
+                                                                onAddToQueue={onAddToQueue ? () => onAddToQueue([track]) : null}
+                                                                onToggleLike={(e) => onToggleLike?.(track.path, e)}
+                                                            />
                                                         ))}
                                                     </div>
                                                 )}
@@ -284,7 +429,15 @@ function GroupedList({ groups, openGroup, setOpenGroup, onPlay, icon, subLabel, 
                                         );
                                     })
                                     : groupTracks.map((track, i) => (
-                                        <TrackRow key={track.path} track={track} onPlay={() => onPlay(groupTracks, i)} label={subLabel?.(track)} />
+                                        <TrackRow
+                                            key={track.path}
+                                            track={track}
+                                            liked={likedSet?.has(track.path)}
+                                            onPlay={() => onPlay(groupTracks, i)}
+                                            onAddToQueue={onAddToQueue ? () => onAddToQueue([track]) : null}
+                                            onToggleLike={(e) => onToggleLike?.(track.path, e)}
+                                            label={subLabel?.(track)}
+                                        />
                                     ))
                                 }
                             </div>
@@ -296,59 +449,129 @@ function GroupedList({ groups, openGroup, setOpenGroup, onPlay, icon, subLabel, 
     );
 }
 
-function TrackRow({ track, onPlay, label }) {
+function TrackRow({ track, onPlay, onAddToQueue, onToggleLike, liked, label }) {
+    const [menuOpen, setMenuOpen] = useState(false);
+
     return (
-        <button
-            onClick={onPlay}
-            className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors group text-left"
-        >
-            <div className="relative w-8 h-8 rounded-md overflow-hidden bg-white/5 flex-shrink-0">
-                {track.has_cover ? (
-                    <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
-                ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                        <Music2 className="w-3 h-3 text-neutral-600" />
+        <div className="relative group">
+            <button
+                onClick={onPlay}
+                className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors text-left"
+            >
+                <div className="relative w-8 h-8 rounded-md overflow-hidden bg-white/5 flex-shrink-0">
+                    {track.has_cover ? (
+                        <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                    ) : (
+                        <div className="w-full h-full flex items-center justify-center"><Music2 className="w-3 h-3 text-neutral-600" /></div>
+                    )}
+                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-md">
+                        <Play className="w-3 h-3 text-white fill-white" />
                     </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate">{track.title}</p>
+                    {label && <p className="text-xs text-neutral-500 truncate">{label}</p>}
+                </div>
+                <span className="text-xs text-neutral-600 font-mono flex-shrink-0 group-hover:hidden">{track.duration}</span>
+            </button>
+            {/* Botões de acção (hover) */}
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
+                <button onClick={onToggleLike} className={`p-1 rounded-md transition-colors hover:bg-white/10 ${liked ? "text-red-500" : "text-neutral-500 hover:text-white"}`}>
+                    <Heart className={`w-3.5 h-3.5 ${liked ? "fill-red-500" : ""}`} />
+                </button>
+                {onAddToQueue && (
+                    <button onClick={(e) => { e.stopPropagation(); onAddToQueue(); }} className="p-1 rounded-md text-neutral-500 hover:text-white hover:bg-white/10 transition-colors" title="Adicionar à fila">
+                        <ListEnd className="w-3.5 h-3.5" />
+                    </button>
                 )}
-                <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-md">
-                    <Play className="w-3 h-3 text-white fill-white" />
+                <div className="relative">
+                    <button onClick={(e) => { e.stopPropagation(); setMenuOpen(m => !m); }} className="p-1 rounded-md text-neutral-500 hover:text-white hover:bg-white/10 transition-colors">
+                        <MoreHorizontal className="w-3.5 h-3.5" />
+                    </button>
+                    {menuOpen && <TrackMenu liked={liked} onToggleLike={onToggleLike} onAddToQueue={onAddToQueue} onClose={() => setMenuOpen(false)} path={track.path} />}
                 </div>
             </div>
-            <div className="flex-1 min-w-0">
-                <p className="text-sm truncate">{track.title}</p>
-                {label && <p className="text-xs text-neutral-500 truncate">{label}</p>}
-            </div>
-            <span className="text-xs text-neutral-600 font-mono flex-shrink-0">{track.duration}</span>
-        </button>
+        </div>
     );
 }
 
-function LibraryRow({ track, onPlay }) {
+function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked }) {
+    const [menuOpen, setMenuOpen] = useState(false);
+
+    return (
+        <div className="relative group">
+            <button
+                onClick={onPlay}
+                className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors text-left"
+            >
+                <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
+                    {track.has_cover ? (
+                        <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                    ) : (
+                        <div className="w-full h-full flex items-center justify-center"><Music2 className="w-4 h-4 text-neutral-600" /></div>
+                    )}
+                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-lg">
+                        <Play className="w-4 h-4 text-white fill-white" />
+                    </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate leading-tight">{track.title}</p>
+                    <p className="text-xs text-neutral-500 truncate mt-0.5">
+                        {track.artist || "Artista desconhecido"}{track.album ? ` · ${track.album}` : ""}
+                    </p>
+                </div>
+                <span className="text-xs text-neutral-600 font-mono flex-shrink-0 group-hover:hidden">{track.duration}</span>
+            </button>
+            {/* Botões de acção (hover) */}
+            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
+                <button onClick={onToggleLike} className={`p-1 rounded-md transition-colors hover:bg-white/10 ${liked ? "text-red-500" : "text-neutral-500 hover:text-white"}`}>
+                    <Heart className={`w-4 h-4 ${liked ? "fill-red-500" : ""}`} />
+                </button>
+                {onAddToQueue && (
+                    <button onClick={(e) => { e.stopPropagation(); onAddToQueue(); }} className="p-1 rounded-md text-neutral-500 hover:text-white hover:bg-white/10 transition-colors" title="Adicionar à fila">
+                        <ListEnd className="w-4 h-4" />
+                    </button>
+                )}
+                <div className="relative">
+                    <button onClick={(e) => { e.stopPropagation(); setMenuOpen(m => !m); }} className="p-1 rounded-md text-neutral-500 hover:text-white hover:bg-white/10 transition-colors">
+                        <MoreHorizontal className="w-4 h-4" />
+                    </button>
+                    {menuOpen && <TrackMenu liked={liked} onToggleLike={onToggleLike} onAddToQueue={onAddToQueue} onClose={() => setMenuOpen(false)} path={track.path} />}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function HorizontalSection({ title, tracks, onPlay }) {
+    return (
+        <div>
+            <p className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-2">{title}</p>
+            <div className="flex gap-3 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+                {tracks.map((track) => (
+                    <TrackCard key={track.path} track={track} onPlay={() => onPlay(track)} />
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function TrackCard({ track, onPlay }) {
     return (
         <button
             onClick={onPlay}
-            className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors group text-left"
+            className="flex-shrink-0 w-24 group text-left"
         >
-            <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
-                {track.has_cover ? (
-                    <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
-                ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                        <Music2 className="w-4 h-4 text-neutral-600" />
-                    </div>
-                )}
-                <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-lg">
-                    <Play className="w-4 h-4 text-white fill-white" />
+            <div className="relative w-24 h-24 rounded-xl overflow-hidden bg-white/5 mb-1.5">
+                {track.has_cover
+                    ? <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                    : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-8 h-8 text-neutral-700" /></div>}
+                <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-xl">
+                    <Play className="w-7 h-7 text-white fill-white" />
                 </div>
             </div>
-            <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate leading-tight">{track.title}</p>
-                <p className="text-xs text-neutral-500 truncate mt-0.5">
-                    {track.artist || "Artista desconhecido"}
-                    {track.album ? ` · ${track.album}` : ""}
-                </p>
-            </div>
-            <span className="text-xs text-neutral-600 font-mono flex-shrink-0">{track.duration}</span>
+            <p className="text-xs font-medium truncate leading-tight">{track.title}</p>
+            <p className="text-[10px] text-neutral-500 truncate mt-0.5">{track.artist}</p>
         </button>
     );
 }
@@ -376,9 +599,7 @@ function ModeToggle({ mode, setMode }) {
                 <button
                     key={t.key}
                     onClick={() => setMode(t.key)}
-                    className={`flex-1 flex items-center justify-center gap-1.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                        mode === t.key ? "bg-white/10 text-white" : "text-neutral-500 hover:text-neutral-300"
-                    }`}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1 rounded-lg text-xs font-medium transition-all ${mode === t.key ? "bg-white/10 text-white" : "text-neutral-500 hover:text-neutral-300"}`}
                 >
                     {t.icon}
                     <span className="hidden sm:inline">{t.label}</span>

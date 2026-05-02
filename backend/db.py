@@ -29,7 +29,23 @@ def init_db(db_path: Path) -> None:
             album     TEXT,
             duration  TEXT,
             has_cover INTEGER DEFAULT 0,
+            liked     INTEGER DEFAULT 0,
             added_at  TEXT    DEFAULT (datetime('now'))
+        )
+    """)
+    try:
+        con.execute("ALTER TABLE tracks ADD COLUMN liked INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        con.execute("ALTER TABLE tracks ADD COLUMN play_count INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS recent_plays (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            path      TEXT NOT NULL,
+            played_at TEXT DEFAULT (datetime('now'))
         )
     """)
     con.execute("""
@@ -89,9 +105,46 @@ def get_track_keys() -> set[str]:
 def get_all_tracks() -> list[dict]:
     with _conn() as con:
         rows = con.execute(
-            "SELECT path, title, artist, album, duration, has_cover "
+            "SELECT path, title, artist, album, duration, has_cover, liked, play_count, added_at "
             "FROM tracks ORDER BY artist, album, title"
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_liked(path: str, liked: bool) -> None:
+    with _conn() as con:
+        con.execute("UPDATE tracks SET liked=? WHERE path=?", (int(liked), path))
+
+
+def increment_play(path: str) -> None:
+    with _conn() as con:
+        con.execute("UPDATE tracks SET play_count = play_count + 1 WHERE path=?", (path,))
+        con.execute("INSERT INTO recent_plays (path) VALUES (?)", (path,))
+        con.execute("DELETE FROM recent_plays WHERE id NOT IN (SELECT id FROM recent_plays ORDER BY id DESC LIMIT 200)")
+
+
+def get_recently_played(limit: int = 12) -> list[dict]:
+    with _conn() as con:
+        rows = con.execute("""
+            SELECT t.path, t.title, t.artist, t.album, t.duration, t.has_cover, t.liked,
+                   MAX(r.played_at) as last_played
+            FROM recent_plays r
+            JOIN tracks t ON r.path = t.path
+            GROUP BY r.path
+            ORDER BY last_played DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_most_played(limit: int = 12) -> list[dict]:
+    with _conn() as con:
+        rows = con.execute("""
+            SELECT path, title, artist, album, duration, has_cover, liked, play_count
+            FROM tracks WHERE play_count > 0
+            ORDER BY play_count DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -149,6 +202,48 @@ def get_sync_playlists_due() -> list[dict]:
               )
         """).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_stats() -> dict:
+    with _conn() as con:
+        total = con.execute("SELECT COUNT(*) as c FROM tracks").fetchone()["c"]
+        liked = con.execute("SELECT COUNT(*) as c FROM tracks WHERE liked=1").fetchone()["c"]
+        total_plays = con.execute("SELECT COALESCE(SUM(play_count), 0) as s FROM tracks").fetchone()["s"]
+        artists = con.execute("SELECT COUNT(DISTINCT artist) as c FROM tracks WHERE artist != ''").fetchone()["c"]
+        albums = con.execute("SELECT COUNT(DISTINCT album) as c FROM tracks WHERE album != ''").fetchone()["c"]
+
+        durations = con.execute("SELECT duration FROM tracks WHERE duration IS NOT NULL").fetchall()
+        total_secs = 0
+        for row in durations:
+            try:
+                parts = str(row["duration"]).split(":")
+                if len(parts) == 2:
+                    total_secs += int(parts[0]) * 60 + int(parts[1])
+            except Exception:
+                pass
+
+        top_artists = con.execute("""
+            SELECT artist, SUM(play_count) as plays
+            FROM tracks WHERE artist != '' AND play_count > 0
+            GROUP BY artist ORDER BY plays DESC LIMIT 5
+        """).fetchall()
+
+        top_tracks = con.execute("""
+            SELECT path, title, artist, has_cover, play_count
+            FROM tracks WHERE play_count > 0
+            ORDER BY play_count DESC LIMIT 5
+        """).fetchall()
+
+    return {
+        "total_tracks": total,
+        "liked_count": liked,
+        "total_plays": total_plays,
+        "unique_artists": artists,
+        "unique_albums": albums,
+        "total_duration_s": total_secs,
+        "top_artists": [dict(r) for r in top_artists],
+        "top_tracks": [dict(r) for r in top_tracks],
+    }
 
 
 def scan_and_index(downloads_dir: Path) -> int:

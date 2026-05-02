@@ -471,9 +471,45 @@ def trigger_sync(pid: str):
 
 
 # ── Biblioteca local ──────────────────────────────────────────────
+class LikeBody(BaseModel):
+    path: str
+    liked: bool
+
+
 @app.get("/library")
 def get_library():
     return {"tracks": _db.get_all_tracks()}
+
+
+@app.patch("/library/like")
+def toggle_like(body: LikeBody):
+    _db.set_liked(body.path, body.liked)
+    return {"ok": True}
+
+
+class PlayBody(BaseModel):
+    path: str
+
+
+@app.post("/library/play")
+def record_play(body: PlayBody):
+    _db.increment_play(body.path)
+    return {"ok": True}
+
+
+@app.get("/library/recently-played")
+def recently_played():
+    return {"tracks": _db.get_recently_played()}
+
+
+@app.get("/library/most-played")
+def most_played():
+    return {"tracks": _db.get_most_played()}
+
+
+@app.get("/library/stats")
+def get_library_stats():
+    return _db.get_stats()
 
 
 @app.post("/library/scan")

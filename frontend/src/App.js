@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Music4, Github, Download, Library } from "lucide-react";
+import { Music4, Github, Download, Library, BarChart2, Settings } from "lucide-react";
 import "@/App.css";
 import "@/index.css";
 import { HomeView } from "./views/HomeView";
 import { ProgressView } from "./views/ProgressView";
 import { CompletedView } from "./views/CompletedView";
 import { LibraryView } from "./views/LibraryView";
+import { StatsView } from "./views/StatsView";
+import { SettingsView } from "./views/SettingsView";
 import { Player } from "./components/Player";
 import { Toaster, toast } from "sonner";
 import axios from "axios";
@@ -13,8 +15,15 @@ import axios from "axios";
 const API = "";
 
 export default function App() {
-    const [tab, setTab] = useState("download"); // download | library
+    const [tab, setTab] = useState("download"); // download | library | stats | settings
     const [phase, setPhase] = useState("home"); // home | downloading | completed
+    const [settings, setSettings] = useState(() => {
+        try { return JSON.parse(localStorage.getItem("playlistr_settings") || "{}"); } catch { return {}; }
+    });
+    const updateSettings = (next) => {
+        setSettings(next);
+        localStorage.setItem("playlistr_settings", JSON.stringify(next));
+    };
     const [tracks, setTracks] = useState([]);
     const [activeIndex, setActiveIndex] = useState(0);
     const [statuses, setStatuses] = useState({});
@@ -142,9 +151,18 @@ export default function App() {
     };
 
     const handlePlay = (queue, index) => {
-        setPlayerQueue(queue);
+        setPlayerQueue([...queue]);
         setPlayerIndex(index);
         setPlayerKey((k) => k + 1);
+    };
+
+    const handleAddToQueue = (tracks) => {
+        if (!playerQueue) {
+            handlePlay(tracks, 0);
+            return;
+        }
+        // Acrescenta à fila sem reiniciar o player (playerKey não muda)
+        setPlayerQueue((prev) => [...prev, ...tracks]);
     };
 
     const handleRetryFailed = () => {
@@ -218,28 +236,25 @@ export default function App() {
 
                 {/* Tabs */}
                 <div className="flex gap-1 mb-4 bg-white/[0.03] rounded-2xl p-1 border border-white/10">
-                    <button
-                        onClick={() => setTab("download")}
-                        className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-medium transition-all ${
-                            tab === "download"
-                                ? "bg-white/10 text-white shadow"
-                                : "text-neutral-500 hover:text-neutral-300"
-                        }`}
-                    >
-                        <Download className="w-4 h-4" />
-                        Download
-                    </button>
-                    <button
-                        onClick={() => setTab("library")}
-                        className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-medium transition-all ${
-                            tab === "library"
-                                ? "bg-white/10 text-white shadow"
-                                : "text-neutral-500 hover:text-neutral-300"
-                        }`}
-                    >
-                        <Library className="w-4 h-4" />
-                        Biblioteca
-                    </button>
+                    {[
+                        { key: "download", icon: <Download className="w-4 h-4" />, label: "Download" },
+                        { key: "library",  icon: <Library className="w-4 h-4" />,  label: "Biblioteca" },
+                        { key: "stats",    icon: <BarChart2 className="w-4 h-4" />, label: "Stats" },
+                        { key: "settings", icon: <Settings className="w-4 h-4" />, label: "Definições" },
+                    ].map((t) => (
+                        <button
+                            key={t.key}
+                            onClick={() => setTab(t.key)}
+                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition-all ${
+                                tab === t.key
+                                    ? "bg-white/10 text-white shadow"
+                                    : "text-neutral-500 hover:text-neutral-300"
+                            }`}
+                        >
+                            {t.icon}
+                            <span className="hidden sm:inline">{t.label}</span>
+                        </button>
+                    ))}
                 </div>
 
                 {/* Painel principal */}
@@ -248,7 +263,13 @@ export default function App() {
                     data-testid="app-main-panel"
                 >
                     {tab === "library" && (
-                        <LibraryView onPlay={handlePlay} />
+                        <LibraryView onPlay={handlePlay} onAddToQueue={handleAddToQueue} />
+                    )}
+
+                    {tab === "stats" && <StatsView />}
+
+                    {tab === "settings" && (
+                        <SettingsView settings={settings} onUpdate={updateSettings} />
                     )}
 
                     {tab === "download" && phase === "home" && <HomeView onStart={handleStart} />}
@@ -299,6 +320,7 @@ export default function App() {
                     key={playerKey}
                     queue={playerQueue}
                     initialIndex={playerIndex}
+                    xfadeSecs={settings.xfadeSecs ?? 3}
                     onClose={() => setPlayerQueue(null)}
                 />
             )}

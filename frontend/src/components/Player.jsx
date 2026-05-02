@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { GripVertical, ListMusic, Moon, Music2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Volume2, VolumeX, X } from "lucide-react";
+import { Activity, ChevronDown, GripVertical, Heart, ListMusic, Moon, Music2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Volume2, VolumeX, X } from "lucide-react";
+import axios from "axios";
+import { extractDominantColor } from "../utils/colorExtract";
 
 const SLEEP_OPTIONS = [0, 15, 30, 45, 60];
+
+const EQ_PRESETS = {
+    plano:  [0, 0, 0],
+    baixos: [8, 2, -2],
+    agudos: [-2, 0, 8],
+    vocal:  [-3, 5, 3],
+};
 
 function makeShuffled(length, currentIdx) {
     const rest = Array.from({ length }, (_, i) => i).filter(i => i !== currentIdx);
@@ -12,7 +21,7 @@ function makeShuffled(length, currentIdx) {
     return [currentIdx, ...rest];
 }
 
-export function Player({ queue, initialIndex, onClose }) {
+export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
     const audioRef = useRef(null);
     const [order, setOrder] = useState(() => queue.map((_, i) => i));
     const [pos, setPos] = useState(initialIndex);
@@ -22,24 +31,111 @@ export function Player({ queue, initialIndex, onClose }) {
     const [volume, setVolume] = useState(1);
     const [muted, setMuted] = useState(false);
     const [shuffle, setShuffle] = useState(false);
-    const [repeat, setRepeat] = useState("none"); // 'none' | 'all' | 'one'
+    const [repeat, setRepeat] = useState("none");
     const [showQueue, setShowQueue] = useState(false);
-    const [dragOver, setDragOver] = useState(null);
+    const [showNowPlaying, setShowNowPlaying] = useState(false);
+    const [accentColor, setAccentColor] = useState(null);
+    const [isLiked, setIsLiked] = useState(false);
     const [sleepMins, setSleepMins] = useState(0);
+    const [crossfade, setCrossfade] = useState(xfadeSecs > 0);
+    const [dragOver, setDragOver] = useState(null);
+    const [eqGains, setEqGains] = useState([0, 0, 0]); // bass, mid, treble (dB)
+    const [showEQ, setShowEQ] = useState(false);
+
+    // refs que não causam re-render
     const dragIdxRef = useRef(null);
     const currentRowRef = useRef(null);
     const sleepTimerRef = useRef(null);
+    const prevQueueLen = useRef(queue.length);
+    const durationRef = useRef(0);
+    const volumeRef = useRef(1);
+    const mutedRef = useRef(false);
+    const xfadeActive = useRef(false);
+    const xfadeIntervalRef = useRef(null);
+    const xfadeSecsRef = useRef(xfadeSecs);
+    const audioCtxRef = useRef(null);
+    const analyserRef = useRef(null);
+    const bassNodeRef = useRef(null);
+    const midNodeRef = useRef(null);
+    const trebleNodeRef = useRef(null);
+
+    // Sincronizar refs com state e props
+    useEffect(() => { volumeRef.current = volume; }, [volume]);
+    useEffect(() => { mutedRef.current = muted; }, [muted]);
+    useEffect(() => { xfadeSecsRef.current = xfadeSecs; }, [xfadeSecs]);
+
+    // Aplicar ganhos do equalizador
+    useEffect(() => {
+        if (bassNodeRef.current) bassNodeRef.current.gain.value = eqGains[0];
+        if (midNodeRef.current) midNodeRef.current.gain.value = eqGains[1];
+        if (trebleNodeRef.current) trebleNodeRef.current.gain.value = eqGains[2];
+    }, [eqGains]);
+
+    const setupAudioCtx = useCallback(() => {
+        if (audioCtxRef.current || !audioRef.current) return;
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = ctx.createMediaElementSource(audioRef.current);
+
+            const bass = ctx.createBiquadFilter();
+            bass.type = "lowshelf";
+            bass.frequency.value = 200;
+
+            const mid = ctx.createBiquadFilter();
+            mid.type = "peaking";
+            mid.frequency.value = 1000;
+            mid.Q.value = 1;
+
+            const treble = ctx.createBiquadFilter();
+            treble.type = "highshelf";
+            treble.frequency.value = 8000;
+
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 128;
+            analyser.smoothingTimeConstant = 0.8;
+
+            source.connect(bass);
+            bass.connect(mid);
+            mid.connect(treble);
+            treble.connect(analyser);
+            analyser.connect(ctx.destination);
+
+            audioCtxRef.current = ctx;
+            analyserRef.current = analyser;
+            bassNodeRef.current = bass;
+            midNodeRef.current = mid;
+            trebleNodeRef.current = treble;
+        } catch (_) {}
+    }, []);
 
     const index = order[pos];
     const track = queue[index];
 
+    // Carregar e tocar faixa (com suporte a fade-in de crossfade)
     useEffect(() => {
         const audio = audioRef.current;
         if (!audio || !track) return;
+        clearInterval(xfadeIntervalRef.current);
         audio.src = `/files/${track.path}`;
         audio.load();
-        audio.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-    }, [pos, order]); // eslint-disable-line react-hooks/exhaustive-deps
+        const vol = mutedRef.current ? 0 : volumeRef.current;
+        const wasFading = xfadeActive.current;
+        audio.volume = wasFading ? 0 : vol;
+        xfadeActive.current = false;
+        audio.play().then(() => {
+            setIsPlaying(true);
+            setupAudioCtx();
+            if (wasFading && vol > 0) {
+                let step = 0;
+                const steps = (xfadeSecsRef.current || 3) * 10;
+                const iv = setInterval(() => {
+                    step++;
+                    if (!audio.paused) audio.volume = Math.min(vol, vol * step / steps);
+                    if (step >= steps) clearInterval(iv);
+                }, 100);
+            }
+        }).catch(() => setIsPlaying(false));
+    }, [pos, order, setupAudioCtx]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         const audio = audioRef.current;
@@ -54,28 +150,69 @@ export function Player({ queue, initialIndex, onClose }) {
         }
     }, [showQueue]);
 
+    // Cor de destaque da capa
+    useEffect(() => {
+        if (!track?.has_cover) { setAccentColor(null); return; }
+        extractDominantColor(`/cover/${track.path}`).then(setAccentColor);
+    }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Estado liked da faixa actual
+    useEffect(() => {
+        setIsLiked(!!track?.liked);
+    }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Título do separador
     useEffect(() => {
         if (!track) return;
-        const prefix = track.artist ? `${track.artist} — ` : "";
-        document.title = `♪ ${prefix}${track.title}`;
+        document.title = `♪ ${track.artist ? track.artist + " — " : ""}${track.title}`;
     }, [track]);
-
-    useEffect(() => {
-        return () => { document.title = "Playlistr"; };
-    }, []);
+    useEffect(() => () => { document.title = "Playlistr"; }, []);
 
     // Sleep timer
     useEffect(() => {
         if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
         if (sleepMins > 0) {
-            sleepTimerRef.current = setTimeout(() => {
-                audioRef.current?.pause();
-                setSleepMins(0);
-            }, sleepMins * 60 * 1000);
+            sleepTimerRef.current = setTimeout(() => { audioRef.current?.pause(); setSleepMins(0); }, sleepMins * 60 * 1000);
         }
         return () => { if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current); };
     }, [sleepMins]);
+
+    // Crescimento da fila (add-to-queue externo)
+    useEffect(() => {
+        if (queue.length > prevQueueLen.current) {
+            const newIdx = Array.from({ length: queue.length - prevQueueLen.current }, (_, i) => prevQueueLen.current + i);
+            setOrder(prev => [...prev, ...newIdx]);
+        }
+        prevQueueLen.current = queue.length;
+    }, [queue.length]);
+
+    // Media Session API — metadados
+    useEffect(() => {
+        if (!("mediaSession" in navigator) || !track) return;
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: track.title || "",
+            artist: track.artist || "",
+            album: track.album || "",
+            artwork: track.has_cover ? [{ src: `/cover/${track.path}`, sizes: "512x512", type: "image/jpeg" }] : [],
+        });
+        navigator.mediaSession.setActionHandler("play", () => audioRef.current?.play());
+        navigator.mediaSession.setActionHandler("pause", () => audioRef.current?.pause());
+        navigator.mediaSession.setActionHandler("previoustrack", () => setPos(p => Math.max(0, p - 1)));
+        navigator.mediaSession.setActionHandler("nexttrack", () => setPos(p => Math.min(order.length - 1, p + 1)));
+        navigator.mediaSession.setActionHandler("seekto", (d) => { if (audioRef.current) audioRef.current.currentTime = d.seekTime; });
+    }, [track, order.length]);
+
+    // Media Session API — estado de reprodução
+    useEffect(() => {
+        if (!("mediaSession" in navigator)) return;
+        navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+    }, [isPlaying]);
+
+    // Registar reprodução (play count + recentes)
+    useEffect(() => {
+        if (!track?.path) return;
+        axios.post("/library/play", { path: track.path }).catch(() => {});
+    }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleEnded = useCallback(() => {
         if (repeat === "one") {
@@ -122,6 +259,7 @@ export function Player({ queue, initialIndex, onClose }) {
             else if (e.key === "ArrowRight") { e.preventDefault(); goNext(); }
             else if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); }
             else if (e.key === "m" || e.key === "M") { setMuted(m => !m); }
+            else if (e.key === "Escape") { setShowNowPlaying(false); }
         };
         document.addEventListener("keydown", onKey);
         return () => document.removeEventListener("keydown", onKey);
@@ -130,63 +268,66 @@ export function Player({ queue, initialIndex, onClose }) {
     const toggleShuffle = () => {
         setShuffle(s => {
             const next = !s;
-            if (next) {
-                const newOrder = makeShuffled(queue.length, index);
-                setOrder(newOrder);
-                setPos(0);
-            } else {
-                setOrder(queue.map((_, i) => i));
-                setPos(index);
-            }
+            if (next) { setOrder(makeShuffled(queue.length, index)); setPos(0); }
+            else { setOrder(queue.map((_, i) => i)); setPos(index); }
             return next;
         });
     };
 
-    const cycleRepeat = () => {
-        setRepeat(r => r === "none" ? "all" : r === "all" ? "one" : "none");
-    };
+    const cycleRepeat = () => setRepeat(r => r === "none" ? "all" : r === "all" ? "one" : "none");
+    const cycleSleep = () => setSleepMins(prev => SLEEP_OPTIONS[(SLEEP_OPTIONS.indexOf(prev) + 1) % SLEEP_OPTIONS.length]);
 
-    const cycleSleep = () => {
-        setSleepMins(prev => {
-            const idx = SLEEP_OPTIONS.indexOf(prev);
-            return SLEEP_OPTIONS[(idx + 1) % SLEEP_OPTIONS.length];
-        });
+    const toggleLike = async () => {
+        if (!track) return;
+        const next = !isLiked;
+        setIsLiked(next);
+        try { await axios.patch("/library/like", { path: track.path, liked: next }); } catch (_) {}
     };
 
     const seek = (e) => {
         const audio = audioRef.current;
         if (!audio || !duration) return;
         const rect = e.currentTarget.getBoundingClientRect();
-        const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-        audio.currentTime = ratio * duration;
+        audio.currentTime = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)) * duration;
     };
 
-    // Drag & drop na fila
-    const handleDragStart = (i, e) => {
-        dragIdxRef.current = i;
-        e.dataTransfer.effectAllowed = "move";
+    // Crossfade — verificar proximidade do fim
+    const handleTimeUpdate = (e) => {
+        const t = e.target.currentTime;
+        setCurrentTime(t);
+
+        // Actualizar posição no Media Session
+        if ("mediaSession" in navigator && durationRef.current > 0) {
+            try {
+                navigator.mediaSession.setPositionState({ duration: durationRef.current, playbackRate: 1, position: t });
+            } catch (_) {}
+        }
+
+        const xfs = xfadeSecsRef.current;
+        if (!crossfade || !xfs || !durationRef.current || xfadeActive.current) return;
+        if (t >= durationRef.current - xfs) {
+            xfadeActive.current = true;
+            const startVol = mutedRef.current ? 0 : volumeRef.current;
+            let step = 0;
+            const steps = xfs * 10;
+            clearInterval(xfadeIntervalRef.current);
+            xfadeIntervalRef.current = setInterval(() => {
+                step++;
+                if (audioRef.current) audioRef.current.volume = startVol * Math.max(0, 1 - step / steps);
+                if (step >= steps) clearInterval(xfadeIntervalRef.current);
+            }, 100);
+        }
     };
 
-    const handleDragOver = (i, e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        setDragOver(i);
-    };
-
+    // Drag & drop
+    const handleDragStart = (i, e) => { dragIdxRef.current = i; e.dataTransfer.effectAllowed = "move"; };
+    const handleDragOver = (i, e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setDragOver(i); };
     const handleDrop = (toPos, e) => {
         e.preventDefault();
         const fromPos = dragIdxRef.current;
-        dragIdxRef.current = null;
-        setDragOver(null);
+        dragIdxRef.current = null; setDragOver(null);
         if (fromPos === null || fromPos === toPos) return;
-
-        setOrder(prev => {
-            const next = [...prev];
-            const [moved] = next.splice(fromPos, 1);
-            next.splice(toPos, 0, moved);
-            return next;
-        });
-
+        setOrder(prev => { const n = [...prev]; const [m] = n.splice(fromPos, 1); n.splice(toPos, 0, m); return n; });
         setPos(p => {
             if (p === fromPos) return toPos;
             if (fromPos < p && p <= toPos) return p - 1;
@@ -194,11 +335,7 @@ export function Player({ queue, initialIndex, onClose }) {
             return p;
         });
     };
-
-    const handleDragEnd = () => {
-        dragIdxRef.current = null;
-        setDragOver(null);
-    };
+    const handleDragEnd = () => { dragIdxRef.current = null; setDragOver(null); };
 
     const pct = duration ? (currentTime / duration) * 100 : 0;
     const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -207,13 +344,95 @@ export function Player({ queue, initialIndex, onClose }) {
 
     return (
         <>
-            {/* Painel da fila */}
-            {showQueue && (
+            {/* Now Playing — ecrã cheio */}
+            {showNowPlaying && (
+                <NowPlaying
+                    track={track}
+                    accentColor={accentColor}
+                    isPlaying={isPlaying}
+                    isLiked={isLiked}
+                    currentTime={currentTime}
+                    duration={duration}
+                    pct={pct}
+                    shuffle={shuffle}
+                    repeat={repeat}
+                    canPrev={canPrev}
+                    canNext={canNext}
+                    volume={volume}
+                    muted={muted}
+                    crossfade={crossfade}
+                    xfadeSecs={xfadeSecs}
+                    analyserRef={analyserRef}
+                    onClose={() => setShowNowPlaying(false)}
+                    onTogglePlay={togglePlay}
+                    onPrev={goPrev}
+                    onNext={goNext}
+                    onSeek={seek}
+                    onToggleShuffle={toggleShuffle}
+                    onCycleRepeat={cycleRepeat}
+                    onToggleLike={toggleLike}
+                    onToggleCrossfade={() => setCrossfade(c => !c)}
+                    onVolume={(v) => { setVolume(v); if (v > 0) setMuted(false); }}
+                    onToggleMute={() => setMuted(m => !m)}
+                    fmt={fmt}
+                />
+            )}
+
+            {/* Painel EQ */}
+            {showEQ && !showNowPlaying && (
                 <div className="fixed bottom-[68px] left-0 right-0 z-40 flex justify-center px-4 pointer-events-none">
-                    <div
-                        className="w-full max-w-lg bg-[#1a1a1a] border border-white/10 rounded-t-xl shadow-2xl max-h-80 overflow-y-auto pointer-events-auto"
-                        style={{ scrollbarWidth: "thin" }}
-                    >
+                    <div className="w-full max-w-lg bg-[#1a1a1a] border border-white/10 rounded-t-xl shadow-2xl p-4 pointer-events-auto">
+                        <div className="flex items-center justify-between mb-4">
+                            <span className="text-xs font-semibold text-neutral-300">Equalizador</span>
+                            <div className="flex gap-1">
+                                {Object.entries(EQ_PRESETS).map(([key, gains]) => {
+                                    const active = gains.every((g, i) => g === eqGains[i]);
+                                    return (
+                                        <button
+                                            key={key}
+                                            onClick={() => setEqGains(gains)}
+                                            className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-all border capitalize ${
+                                                active
+                                                    ? "bg-[#1DB954]/20 text-[#1DB954] border-[#1DB954]/40"
+                                                    : "bg-white/5 text-neutral-500 hover:text-white border-white/10"
+                                            }`}
+                                        >
+                                            {key}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        <div className="flex justify-around gap-2">
+                            {[["Baixos", 0], ["Médios", 1], ["Agudos", 2]].map(([label, idx]) => (
+                                <div key={label} className="flex flex-col items-center gap-2">
+                                    <span className="text-[10px] text-neutral-500 font-mono w-8 text-center">
+                                        {eqGains[idx] >= 0 ? "+" : ""}{eqGains[idx]}dB
+                                    </span>
+                                    <div className="flex items-center justify-center" style={{ height: "80px" }}>
+                                        <input
+                                            type="range" min="-12" max="12" step="1"
+                                            value={eqGains[idx]}
+                                            onChange={(e) => {
+                                                const v = parseInt(e.target.value);
+                                                setEqGains((prev) => { const n = [...prev]; n[idx] = v; return n; });
+                                            }}
+                                            className="accent-[#1DB954] cursor-pointer"
+                                            style={{ width: "72px", transform: "rotate(-90deg)" }}
+                                        />
+                                    </div>
+                                    <span className="text-[10px] text-neutral-500">{label}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Fila */}
+            {showQueue && !showNowPlaying && (
+                <div className="fixed bottom-[68px] left-0 right-0 z-40 flex justify-center px-4 pointer-events-none">
+                    <div className="w-full max-w-lg bg-[#1a1a1a] border border-white/10 rounded-t-xl shadow-2xl max-h-80 overflow-y-auto pointer-events-auto" style={{ scrollbarWidth: "thin" }}>
                         <div className="sticky top-0 bg-[#1a1a1a] px-4 py-2.5 border-b border-white/10 flex items-center justify-between">
                             <span className="text-xs font-semibold text-neutral-300">Fila de reprodução</span>
                             <span className="text-[11px] text-neutral-500">{order.length} faixas</span>
@@ -221,7 +440,6 @@ export function Player({ queue, initialIndex, onClose }) {
                         {order.map((qIdx, i) => {
                             const t = queue[qIdx];
                             const isCurrent = i === pos;
-                            const isDragTarget = dragOver === i;
                             return (
                                 <div
                                     key={`${qIdx}-${i}`}
@@ -234,24 +452,17 @@ export function Player({ queue, initialIndex, onClose }) {
                                     onClick={() => setPos(i)}
                                     className={`flex items-center gap-3 px-3 py-2 cursor-pointer select-none transition-colors
                                         ${isCurrent ? "bg-white/5" : "hover:bg-white/[0.03]"}
-                                        ${isDragTarget ? "border-t border-[#1DB954]" : ""}`}
+                                        ${dragOver === i ? "border-t border-[#1DB954]" : ""}`}
                                 >
                                     <GripVertical className="w-4 h-4 text-neutral-600 flex-shrink-0 cursor-grab active:cursor-grabbing" />
                                     <div className="w-7 h-7 rounded overflow-hidden bg-white/5 flex-shrink-0">
-                                        {t?.has_cover ? (
-                                            <img src={`/cover/${t.path}`} alt="" className="w-full h-full object-cover"
-                                                onError={(e) => { e.target.style.display = "none"; }} />
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center">
-                                                <Music2 className="w-3 h-3 text-neutral-700" />
-                                            </div>
-                                        )}
+                                        {t?.has_cover
+                                            ? <img src={`/cover/${t.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                            : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-3 h-3 text-neutral-700" /></div>}
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                        <p className={`text-xs truncate leading-tight font-medium ${isCurrent ? "text-[#1DB954]" : ""}`}>
-                                            {t?.title}
-                                        </p>
-                                        <p className="text-[11px] text-neutral-500 truncate mt-0.5">{t?.artist}</p>
+                                        <p className={`text-xs truncate font-medium ${isCurrent ? "text-[#1DB954]" : ""}`}>{t?.title}</p>
+                                        <p className="text-[11px] text-neutral-500 truncate">{t?.artist}</p>
                                     </div>
                                     {isCurrent && (
                                         <div className="flex gap-0.5 items-end h-3 flex-shrink-0">
@@ -269,92 +480,78 @@ export function Player({ queue, initialIndex, onClose }) {
             )}
 
             {/* Barra do player */}
-            <div className="fixed bottom-0 left-0 right-0 bg-[#111]/95 backdrop-blur-xl border-t border-white/10 px-4 py-2.5 z-50">
+            <div
+                className="fixed bottom-0 left-0 right-0 backdrop-blur-xl border-t border-white/10 px-4 py-2.5 z-50 transition-colors duration-700"
+                style={{ backgroundColor: accentColor ? `color-mix(in srgb, ${accentColor} 18%, #111 82%)` : "#111" }}
+            >
                 <audio
                     ref={audioRef}
-                    onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
-                    onLoadedMetadata={(e) => setDuration(e.target.duration)}
+                    onTimeUpdate={handleTimeUpdate}
+                    onLoadedMetadata={(e) => { const d = e.target.duration; setDuration(d); durationRef.current = d; }}
                     onEnded={handleEnded}
                     onPlay={() => setIsPlaying(true)}
                     onPause={() => setIsPlaying(false)}
                 />
 
                 <div className="max-w-3xl mx-auto flex items-center gap-2 sm:gap-4">
-                    {/* Capa + informação */}
-                    <div className="flex items-center gap-2 sm:gap-3 w-28 sm:w-44 flex-shrink-0 min-w-0">
+                    {/* Capa + info → abre Now Playing */}
+                    <button
+                        onClick={() => setShowNowPlaying(true)}
+                        className="flex items-center gap-2 sm:gap-3 w-28 sm:w-44 flex-shrink-0 min-w-0 hover:opacity-80 transition-opacity text-left"
+                    >
                         <div className="w-9 h-9 rounded-md overflow-hidden bg-white/5 flex-shrink-0">
-                            {track?.has_cover ? (
-                                <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover"
-                                    onError={(e) => { e.target.style.display = "none"; }} />
-                            ) : (
-                                <div className="w-full h-full flex items-center justify-center">
-                                    <Music2 className="w-4 h-4 text-neutral-700" />
-                                </div>
-                            )}
+                            {track?.has_cover
+                                ? <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-4 h-4 text-neutral-700" /></div>}
                         </div>
                         <div className="min-w-0">
                             <p className="text-xs font-semibold truncate leading-tight">{track?.title}</p>
                             <p className="text-[11px] text-neutral-500 truncate mt-0.5">{track?.artist}</p>
                         </div>
-                    </div>
+                    </button>
 
                     {/* Controlos centrais */}
                     <div className="flex-1 flex flex-col items-center gap-1">
                         <div className="flex items-center gap-3 sm:gap-4">
-                            <button onClick={toggleShuffle} title="Shuffle"
-                                className={`transition-colors ${shuffle ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
-                                <Shuffle className="w-4 h-4" />
+                            <button onClick={toggleShuffle} className={`transition-colors ${shuffle ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}><Shuffle className="w-4 h-4" /></button>
+                            <button onClick={goPrev} disabled={!canPrev} className="text-neutral-400 hover:text-white disabled:opacity-25 transition-colors"><SkipBack className="w-4 h-4" /></button>
+                            <button onClick={togglePlay} className="w-8 h-8 rounded-full bg-white flex items-center justify-center hover:scale-105 active:scale-95 transition-transform">
+                                {isPlaying ? <Pause className="w-3.5 h-3.5 text-black fill-black" /> : <Play className="w-3.5 h-3.5 text-black fill-black ml-0.5" />}
                             </button>
-                            <button onClick={goPrev} disabled={!canPrev}
-                                className="text-neutral-400 hover:text-white disabled:opacity-25 transition-colors">
-                                <SkipBack className="w-4 h-4" />
-                            </button>
-                            <button onClick={togglePlay}
-                                className="w-8 h-8 rounded-full bg-white flex items-center justify-center hover:scale-105 active:scale-95 transition-transform">
-                                {isPlaying
-                                    ? <Pause className="w-3.5 h-3.5 text-black fill-black" />
-                                    : <Play className="w-3.5 h-3.5 text-black fill-black ml-0.5" />}
-                            </button>
-                            <button onClick={goNext} disabled={!canNext}
-                                className="text-neutral-400 hover:text-white disabled:opacity-25 transition-colors">
-                                <SkipForward className="w-4 h-4" />
-                            </button>
-                            <button onClick={cycleRepeat}
-                                title={repeat === "none" ? "Repetir desligado" : repeat === "all" ? "Repetir tudo" : "Repetir uma faixa"}
-                                className={`transition-colors ${repeat !== "none" ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
+                            <button onClick={goNext} disabled={!canNext} className="text-neutral-400 hover:text-white disabled:opacity-25 transition-colors"><SkipForward className="w-4 h-4" /></button>
+                            <button onClick={cycleRepeat} className={`transition-colors ${repeat !== "none" ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
                                 {repeat === "one" ? <Repeat1 className="w-4 h-4" /> : <Repeat className="w-4 h-4" />}
                             </button>
                         </div>
-
-                        {/* Scrubber */}
                         <div className="w-full flex items-center gap-2">
                             <span className="text-[10px] text-neutral-600 font-mono w-7 text-right tabular-nums">{fmt(currentTime)}</span>
                             <div className="flex-1 h-1 bg-white/10 rounded-full cursor-pointer group relative" onClick={seek}>
                                 <div className="h-full bg-[#1DB954] rounded-full transition-[width] duration-100" style={{ width: `${pct}%` }} />
-                                <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white shadow opacity-0 group-hover:opacity-100 transition-opacity -ml-1.5"
-                                    style={{ left: `${pct}%` }} />
+                                <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white shadow opacity-0 group-hover:opacity-100 transition-opacity -ml-1.5" style={{ left: `${pct}%` }} />
                             </div>
                             <span className="text-[10px] text-neutral-600 font-mono w-7 tabular-nums">{fmt(duration)}</span>
                         </div>
                     </div>
 
-                    {/* Fila + Sleep + Volume + fechar */}
+                    {/* Direita */}
                     <div className="flex items-center gap-1 sm:gap-2 w-auto sm:w-36 flex-shrink-0 justify-end">
-                        <button onClick={() => setShowQueue(q => !q)} title="Fila de reprodução"
-                            className={`transition-colors ${showQueue ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
+                        <button onClick={toggleLike} className={`transition-colors ${isLiked ? "text-red-500" : "text-neutral-500 hover:text-white"}`}>
+                            <Heart className={`w-4 h-4 ${isLiked ? "fill-red-500" : ""}`} />
+                        </button>
+                        <button onClick={() => { setShowQueue(q => !q); setShowEQ(false); }} className={`transition-colors ${showQueue ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
                             <ListMusic className="w-4 h-4" />
                         </button>
-                        <button
-                            onClick={cycleSleep}
-                            title={sleepMins > 0 ? `Sleep timer: ${sleepMins} min` : "Sleep timer desligado"}
-                            className={`relative transition-colors ${sleepMins > 0 ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}
-                        >
+                        <button onClick={() => { setShowEQ(e => !e); setShowQueue(false); }} title="Equalizador" className={`hidden sm:block transition-colors ${showEQ || eqGains.some(g => g !== 0) ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
+                            <SlidersHorizontal className="w-4 h-4" />
+                        </button>
+                        {xfadeSecs > 0 && (
+                            <button onClick={() => setCrossfade(c => !c)} title={crossfade ? "Crossfade ligado" : "Crossfade desligado"} className={`hidden sm:block transition-colors ${crossfade ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
+                                <Activity className="w-4 h-4" />
+                            </button>
+                        )}
+                        <button onClick={cycleSleep} title={sleepMins > 0 ? `Sleep: ${sleepMins}m` : "Sleep timer"} className={`relative transition-colors ${sleepMins > 0 ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
                             <Moon className="w-4 h-4" />
-                            {sleepMins > 0 && (
-                                <span className="absolute -top-1.5 -right-1.5 text-[9px] font-bold leading-none bg-[#1DB954] text-black rounded-full px-0.5 min-w-[14px] text-center">
-                                    {sleepMins}
-                                </span>
-                            )}
+                            {sleepMins > 0 && <span className="absolute -top-1.5 -right-1.5 text-[9px] font-bold bg-[#1DB954] text-black rounded-full px-0.5 min-w-[14px] text-center leading-none">{sleepMins}</span>}
                         </button>
                         <button onClick={() => setMuted(m => !m)} className="text-neutral-400 hover:text-white transition-colors">
                             {muted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
@@ -363,8 +560,7 @@ export function Player({ queue, initialIndex, onClose }) {
                             onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); if (v > 0) setMuted(false); }}
                             className="hidden sm:block w-16 accent-[#1DB954] cursor-pointer" />
                         {onClose && (
-                            <button onClick={onClose} title="Fechar player"
-                                className="ml-1 text-neutral-600 hover:text-neutral-300 transition-colors">
+                            <button onClick={onClose} className="ml-1 text-neutral-600 hover:text-neutral-300 transition-colors">
                                 <X className="w-4 h-4" />
                             </button>
                         )}
@@ -372,5 +568,142 @@ export function Player({ queue, initialIndex, onClose }) {
                 </div>
             </div>
         </>
+    );
+}
+
+// ── Visualizador de áudio ─────────────────────────────────────────
+
+function Visualizer({ analyserRef }) {
+    const canvasRef = useRef(null);
+    const rafRef = useRef(null);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const W = canvas.width;
+        const H = canvas.height;
+
+        const draw = () => {
+            rafRef.current = requestAnimationFrame(draw);
+            const analyser = analyserRef.current;
+            if (!analyser) { ctx.clearRect(0, 0, W, H); return; }
+            const bins = analyser.frequencyBinCount;
+            const data = new Uint8Array(bins);
+            analyser.getByteFrequencyData(data);
+
+            ctx.clearRect(0, 0, W, H);
+            const barCount = Math.min(40, bins);
+            const gap = 2;
+            const barW = (W - gap * (barCount - 1)) / barCount;
+            for (let i = 0; i < barCount; i++) {
+                const val = data[i] / 255;
+                const h = Math.max(3, val * H);
+                const alpha = 0.35 + val * 0.65;
+                ctx.fillStyle = `rgba(29,185,84,${alpha})`;
+                ctx.fillRect(i * (barW + gap), H - h, barW, h);
+            }
+        };
+        draw();
+        return () => cancelAnimationFrame(rafRef.current);
+    }, [analyserRef]);
+
+    return <canvas ref={canvasRef} width={320} height={56} className="w-full opacity-80 mt-4" />;
+}
+
+// ── Now Playing overlay ───────────────────────────────────────────
+
+function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, duration, pct, shuffle, repeat, canPrev, canNext, volume, muted, crossfade, xfadeSecs, analyserRef, onClose, onTogglePlay, onPrev, onNext, onSeek, onToggleShuffle, onCycleRepeat, onToggleLike, onToggleCrossfade, onVolume, onToggleMute, fmt }) {
+    const gradient = accentColor
+        ? `linear-gradient(180deg, ${accentColor}cc 0%, #0e0e0e 58%, #080808 100%)`
+        : "linear-gradient(180deg, #1e1e1e 0%, #080808 100%)";
+
+    return (
+        <div
+            className="fixed inset-0 z-[60] flex flex-col items-center justify-between py-8 px-6 overflow-y-auto"
+            style={{ background: gradient }}
+        >
+            {/* Topo */}
+            <div className="w-full max-w-sm flex items-center justify-between">
+                <button onClick={onClose} className="text-neutral-400 hover:text-white transition-colors p-1">
+                    <ChevronDown className="w-6 h-6" />
+                </button>
+                <p className="text-xs font-semibold tracking-widest uppercase text-neutral-400">A reproduzir</p>
+                <div className="w-7" />
+            </div>
+
+            {/* Capa grande */}
+            <div className="w-full max-w-xs aspect-square rounded-2xl overflow-hidden shadow-[0_30px_80px_rgba(0,0,0,0.7)] mt-4">
+                {track?.has_cover
+                    ? <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                    : <div className="w-full h-full bg-white/5 flex items-center justify-center"><Music2 className="w-20 h-20 text-neutral-700" /></div>}
+            </div>
+
+            {/* Info + like */}
+            <div className="w-full max-w-sm mt-5">
+                <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                        <p className="text-2xl font-bold truncate leading-tight">{track?.title}</p>
+                        <p className="text-neutral-400 text-sm mt-1 truncate">{track?.artist}</p>
+                    </div>
+                    <button onClick={onToggleLike} className={`mt-1 flex-shrink-0 transition-colors ${isLiked ? "text-red-500" : "text-neutral-500 hover:text-white"}`}>
+                        <Heart className={`w-6 h-6 ${isLiked ? "fill-red-500" : ""}`} />
+                    </button>
+                </div>
+
+                {/* Visualizador */}
+                <Visualizer analyserRef={analyserRef} />
+
+                {/* Scrubber */}
+                <div className="mt-4">
+                    <div className="h-1.5 bg-white/10 rounded-full cursor-pointer group relative" onClick={onSeek}>
+                        <div className="h-full bg-white rounded-full" style={{ width: `${pct}%` }} />
+                        <div className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white shadow-lg opacity-0 group-hover:opacity-100 transition-opacity -ml-2" style={{ left: `${pct}%` }} />
+                    </div>
+                    <div className="flex justify-between mt-1.5">
+                        <span className="text-[11px] text-neutral-500 font-mono tabular-nums">{fmt(currentTime)}</span>
+                        <span className="text-[11px] text-neutral-500 font-mono tabular-nums">{fmt(duration)}</span>
+                    </div>
+                </div>
+
+                {/* Controlos */}
+                <div className="flex items-center justify-between mt-4">
+                    <button onClick={onToggleShuffle} className={`transition-colors ${shuffle ? "text-white" : "text-neutral-600 hover:text-white"}`}><Shuffle className="w-5 h-5" /></button>
+                    <button onClick={onPrev} disabled={!canPrev} className="text-white disabled:opacity-25 transition-colors"><SkipBack className="w-7 h-7" /></button>
+                    <button onClick={onTogglePlay} className="w-16 h-16 rounded-full bg-white flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-xl">
+                        {isPlaying ? <Pause className="w-7 h-7 text-black fill-black" /> : <Play className="w-7 h-7 text-black fill-black ml-1" />}
+                    </button>
+                    <button onClick={onNext} disabled={!canNext} className="text-white disabled:opacity-25 transition-colors"><SkipForward className="w-7 h-7" /></button>
+                    <button onClick={onCycleRepeat} className={`transition-colors ${repeat !== "none" ? "text-white" : "text-neutral-600 hover:text-white"}`}>
+                        {repeat === "one" ? <Repeat1 className="w-5 h-5" /> : <Repeat className="w-5 h-5" />}
+                    </button>
+                </div>
+
+                {/* Volume + Crossfade */}
+                <div className="flex items-center gap-3 mt-5">
+                    <button onClick={onToggleMute} className="text-neutral-400 hover:text-white transition-colors">
+                        {muted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                    </button>
+                    <input type="range" min="0" max="1" step="0.02" value={muted ? 0 : volume}
+                        onChange={(e) => onVolume(parseFloat(e.target.value))}
+                        className="flex-1 accent-white cursor-pointer" />
+                    <Volume2 className="w-4 h-4 text-neutral-400" />
+                </div>
+
+                {/* Crossfade toggle */}
+                {xfadeSecs > 0 && (
+                <button
+                    onClick={onToggleCrossfade}
+                    className={`mt-4 w-full flex items-center justify-between px-4 py-2.5 rounded-xl border transition-all ${crossfade ? "border-[#1DB954]/40 bg-[#1DB954]/10 text-[#1DB954]" : "border-white/10 text-neutral-500 hover:text-white"}`}
+                >
+                    <div className="flex items-center gap-2">
+                        <Activity className="w-4 h-4" />
+                        <span className="text-sm font-medium">Crossfade</span>
+                    </div>
+                    <span className="text-xs">{crossfade ? `${xfadeSecs}s · ligado` : "desligado"}</span>
+                </button>
+                )}
+            </div>
+        </div>
     );
 }
