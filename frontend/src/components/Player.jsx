@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { GripVertical, ListMusic, Music2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Volume2, VolumeX, X } from "lucide-react";
+import { GripVertical, ListMusic, Moon, Music2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Volume2, VolumeX, X } from "lucide-react";
+
+const SLEEP_OPTIONS = [0, 15, 30, 45, 60];
 
 function makeShuffled(length, currentIdx) {
     const rest = Array.from({ length }, (_, i) => i).filter(i => i !== currentIdx);
@@ -23,8 +25,10 @@ export function Player({ queue, initialIndex, onClose }) {
     const [repeat, setRepeat] = useState("none"); // 'none' | 'all' | 'one'
     const [showQueue, setShowQueue] = useState(false);
     const [dragOver, setDragOver] = useState(null);
+    const [sleepMins, setSleepMins] = useState(0);
     const dragIdxRef = useRef(null);
     const currentRowRef = useRef(null);
+    const sleepTimerRef = useRef(null);
 
     const index = order[pos];
     const track = queue[index];
@@ -49,6 +53,29 @@ export function Player({ queue, initialIndex, onClose }) {
             currentRowRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
         }
     }, [showQueue]);
+
+    // Título do separador
+    useEffect(() => {
+        if (!track) return;
+        const prefix = track.artist ? `${track.artist} — ` : "";
+        document.title = `♪ ${prefix}${track.title}`;
+    }, [track]);
+
+    useEffect(() => {
+        return () => { document.title = "Playlistr"; };
+    }, []);
+
+    // Sleep timer
+    useEffect(() => {
+        if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
+        if (sleepMins > 0) {
+            sleepTimerRef.current = setTimeout(() => {
+                audioRef.current?.pause();
+                setSleepMins(0);
+            }, sleepMins * 60 * 1000);
+        }
+        return () => { if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current); };
+    }, [sleepMins]);
 
     const handleEnded = useCallback(() => {
         if (repeat === "one") {
@@ -79,12 +106,26 @@ export function Player({ queue, initialIndex, onClose }) {
         });
     }, [repeat, order.length]);
 
-    const togglePlay = () => {
+    const togglePlay = useCallback(() => {
         const audio = audioRef.current;
         if (!audio) return;
         if (isPlaying) { audio.pause(); setIsPlaying(false); }
         else audio.play().then(() => setIsPlaying(true)).catch(() => {});
-    };
+    }, [isPlaying]);
+
+    // Atalhos de teclado
+    useEffect(() => {
+        const onKey = (e) => {
+            const tag = e.target.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable) return;
+            if (e.key === " ") { e.preventDefault(); togglePlay(); }
+            else if (e.key === "ArrowRight") { e.preventDefault(); goNext(); }
+            else if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); }
+            else if (e.key === "m" || e.key === "M") { setMuted(m => !m); }
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [togglePlay, goNext, goPrev]);
 
     const toggleShuffle = () => {
         setShuffle(s => {
@@ -103,6 +144,13 @@ export function Player({ queue, initialIndex, onClose }) {
 
     const cycleRepeat = () => {
         setRepeat(r => r === "none" ? "all" : r === "all" ? "one" : "none");
+    };
+
+    const cycleSleep = () => {
+        setSleepMins(prev => {
+            const idx = SLEEP_OPTIONS.indexOf(prev);
+            return SLEEP_OPTIONS[(idx + 1) % SLEEP_OPTIONS.length];
+        });
     };
 
     const seek = (e) => {
@@ -290,11 +338,23 @@ export function Player({ queue, initialIndex, onClose }) {
                         </div>
                     </div>
 
-                    {/* Fila + Volume + fechar */}
+                    {/* Fila + Sleep + Volume + fechar */}
                     <div className="flex items-center gap-1 sm:gap-2 w-auto sm:w-36 flex-shrink-0 justify-end">
                         <button onClick={() => setShowQueue(q => !q)} title="Fila de reprodução"
                             className={`transition-colors ${showQueue ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}>
                             <ListMusic className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={cycleSleep}
+                            title={sleepMins > 0 ? `Sleep timer: ${sleepMins} min` : "Sleep timer desligado"}
+                            className={`relative transition-colors ${sleepMins > 0 ? "text-[#1DB954]" : "text-neutral-500 hover:text-white"}`}
+                        >
+                            <Moon className="w-4 h-4" />
+                            {sleepMins > 0 && (
+                                <span className="absolute -top-1.5 -right-1.5 text-[9px] font-bold leading-none bg-[#1DB954] text-black rounded-full px-0.5 min-w-[14px] text-center">
+                                    {sleepMins}
+                                </span>
+                            )}
                         </button>
                         <button onClick={() => setMuted(m => !m)} className="text-neutral-400 hover:text-white transition-colors">
                             {muted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
