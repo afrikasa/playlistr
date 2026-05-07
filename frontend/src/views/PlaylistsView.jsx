@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { ListMusic, Music2, Play, Plus, Trash2, Pencil, Check, X, ChevronLeft } from "lucide-react";
 import axios from "axios";
 
@@ -16,13 +16,13 @@ function PlaylistCover({ tracks, library }) {
     }
 
     if (covered.length < 4) {
-        return <img src={`/cover/${covered[0].path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />;
+        return <img src={assetUrl(`/cover/${covered[0].path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />;
     }
 
     return (
         <div className="grid grid-cols-2 w-full h-full">
             {covered.slice(0, 4).map((t, i) => (
-                <img key={i} src={`/cover/${t.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                <img key={i} src={assetUrl(`/cover/${t.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
             ))}
         </div>
     );
@@ -154,7 +154,7 @@ export function PlaylistsView({ onPlay }) {
                                     className="relative w-9 h-9 rounded-lg overflow-hidden bg-white/5 flex-shrink-0"
                                 >
                                     {track.has_cover ? (
-                                        <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                        <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                                     ) : (
                                         <div className="w-full h-full flex items-center justify-center">
                                             <Music2 className="w-4 h-4 text-neutral-600" />
@@ -315,3 +315,4 @@ export function PlaylistsView({ onPlay }) {
         </div>
     );
 }
+

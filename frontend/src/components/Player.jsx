@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, ChevronDown, GripVertical, Heart, ListMusic, Moon, Music2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Volume2, VolumeX, X } from "lucide-react";
 import axios from "axios";
 import { extractDominantColor } from "../utils/colorExtract";
+import { assetUrl } from "../utils/apiBase";
 
 const SLEEP_OPTIONS = [0, 15, 30, 45, 60];
 
@@ -116,7 +117,7 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
         const audio = audioRef.current;
         if (!audio || !track) return;
         clearInterval(xfadeIntervalRef.current);
-        audio.src = `/files/${track.path}`;
+        audio.src = track.blobUrl || assetUrl(`/files/${track.path}`);
         audio.load();
         const vol = mutedRef.current ? 0 : volumeRef.current;
         const wasFading = xfadeActive.current;
@@ -153,7 +154,7 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
     // Cor de destaque da capa
     useEffect(() => {
         if (!track?.has_cover) { setAccentColor(null); return; }
-        extractDominantColor(`/cover/${track.path}`).then(setAccentColor);
+        extractDominantColor(assetUrl(`/cover/${track.path}`)).then(setAccentColor);
     }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Estado liked da faixa actual
@@ -193,7 +194,7 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
             title: track.title || "",
             artist: track.artist || "",
             album: track.album || "",
-            artwork: track.has_cover ? [{ src: `/cover/${track.path}`, sizes: "512x512", type: "image/jpeg" }] : [],
+            artwork: track.has_cover ? [{ src: assetUrl(`/cover/${track.path}`), sizes: "512x512", type: "image/jpeg" }] : [],
         });
         navigator.mediaSession.setActionHandler("play", () => audioRef.current?.play());
         navigator.mediaSession.setActionHandler("pause", () => audioRef.current?.pause());
@@ -457,7 +458,7 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
                                     <GripVertical className="w-4 h-4 text-neutral-600 flex-shrink-0 cursor-grab active:cursor-grabbing" />
                                     <div className="w-7 h-7 rounded overflow-hidden bg-white/5 flex-shrink-0">
                                         {t?.has_cover
-                                            ? <img src={`/cover/${t.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                            ? <img src={assetUrl(`/cover/${t.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                                             : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-3 h-3 text-neutral-700" /></div>}
                                     </div>
                                     <div className="flex-1 min-w-0">
@@ -501,7 +502,7 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
                     >
                         <div className="w-9 h-9 rounded-md overflow-hidden bg-white/5 flex-shrink-0">
                             {track?.has_cover
-                                ? <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                                 : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-4 h-4 text-neutral-700" /></div>}
                         </div>
                         <div className="min-w-0">
@@ -635,7 +636,7 @@ function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, durat
             {/* Capa grande */}
             <div className="w-full max-w-xs aspect-square rounded-2xl overflow-hidden shadow-[0_30px_80px_rgba(0,0,0,0.7)] mt-4">
                 {track?.has_cover
-                    ? <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                    ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                     : <div className="w-full h-full bg-white/5 flex items-center justify-center"><Music2 className="w-20 h-20 text-neutral-700" /></div>}
             </div>
 
@@ -707,3 +708,4 @@ function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, durat
         </div>
     );
 }
+

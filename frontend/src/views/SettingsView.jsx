@@ -1,4 +1,5 @@
 import { Settings2 } from "lucide-react";
+import { useState } from "react";
 
 const XFADE_OPTIONS = [
     { value: 0,  label: "Desligado" },
@@ -17,6 +18,25 @@ const QUALITY_OPTIONS = [
 export function SettingsView({ settings, onUpdate }) {
     const xfade = settings.xfadeSecs ?? 3;
     const quality = settings.defaultQuality || "192";
+    const [urlDraft, setUrlDraft] = useState(settings.serverUrl || "");
+    const [testStatus, setTestStatus] = useState(null); // null | "ok" | "erro"
+
+    const saveUrl = (val) => {
+        const trimmed = val.trim();
+        setUrlDraft(trimmed);
+        onUpdate({ ...settings, serverUrl: trimmed || undefined });
+        setTestStatus(null);
+    };
+
+    const testConnection = async () => {
+        const base = (urlDraft || "").replace(/\/$/, "");
+        try {
+            const res = await fetch(`${base}/auth-status`, { signal: AbortSignal.timeout(4000) });
+            setTestStatus(res.ok ? "ok" : "erro");
+        } catch {
+            setTestStatus("erro");
+        }
+    };
 
     return (
         <div className="space-y-6 fade-up">
@@ -60,6 +80,48 @@ export function SettingsView({ settings, onUpdate }) {
                         ))}
                     </div>
                 </SettingRow>
+            </Section>
+
+            <Section title="Servidor">
+                <div className="px-4 py-3.5 space-y-2">
+                    <div>
+                        <p className="text-sm font-medium">URL do backend</p>
+                        <p className="text-xs text-neutral-500 mt-0.5">
+                            Deixa vazio para usar o servidor local. Para aceder do telemóvel via Tailscale, coloca o IP do PC (ex: <span className="font-mono text-neutral-400">http://100.x.x.x:8000</span>).
+                        </p>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                        <input
+                            type="url"
+                            value={urlDraft}
+                            onChange={(e) => { setUrlDraft(e.target.value); setTestStatus(null); }}
+                            onBlur={(e) => saveUrl(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && saveUrl(e.target.value)}
+                            placeholder="http://100.x.x.x:8000"
+                            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-neutral-600 outline-none focus:border-[#1DB954]/50 focus:ring-1 focus:ring-[#1DB954]/30 font-mono"
+                        />
+                        <button
+                            onClick={testConnection}
+                            className="px-3 py-2 rounded-lg text-xs font-medium bg-white/5 border border-white/10 hover:border-white/20 text-neutral-400 hover:text-white transition-all whitespace-nowrap"
+                        >
+                            Testar
+                        </button>
+                    </div>
+                    {testStatus === "ok" && (
+                        <p className="text-xs text-[#1DB954]">✓ Ligação estabelecida</p>
+                    )}
+                    {testStatus === "erro" && (
+                        <p className="text-xs text-red-400">✗ Sem resposta — verifica o URL e o Tailscale</p>
+                    )}
+                    {settings.serverUrl && (
+                        <button
+                            onClick={() => { setUrlDraft(""); saveUrl(""); }}
+                            className="text-xs text-neutral-500 hover:text-red-400 transition-colors"
+                        >
+                            Usar servidor local
+                        </button>
+                    )}
+                </div>
             </Section>
         </div>
     );

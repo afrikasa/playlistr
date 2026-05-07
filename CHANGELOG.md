@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## [2.2.0] - 2026-05-07
+
+### Adicionado
+- PWA: manifest completo, Service Worker com cache-first strategy para funcionar offline
+- Tab "Local" na Biblioteca: abre pasta do telemóvel via File System Access API, persiste handle em IndexedDB entre sessões
+- Multi-backend: campo "Servidor" nas Definições para configurar URL remoto (Tailscale/IP)
+- Modo offline: biblioteca guardada em localStorage, carregada automaticamente quando servidor inacessível
+- Banner "Servidor offline" na app e na Biblioteca quando o backend não responde
+- Download de faixas para o telemóvel: opção no menu de contexto cria `<a download>` com o MP3
+- `start.bat` configura Tailscale Serve automaticamente (reset + serve 8000) e mostra URL do telemóvel
+
+### Corrigido
+- `API` undefined em App.js na chamada `/download` (era `apiBase`)
+- Service Worker v3: substituído `addAll` por fetches individuais — instalação nunca aborta por um asset em falta
+- Verificação de estado do servidor a cada 30s com timeout de 3s
+
+---
+
+## [2.1.0] - 2026-05-03
+
+### Adicionado
+- Equalizador Web Audio API: bass (lowshelf 200 Hz) / mid (peaking 1 kHz) / treble (highshelf 8 kHz), sliders verticais, presets (plano/baixos/agudos/vocal)
+- Visualizador de áudio: canvas com 40 barras FFT via AnalyserNode
+- Crossfade configurável nas Definições (0 / 1 / 2 / 3 / 5 s)
+- Sleep timer: cicla 0 → 15 → 30 → 45 → 60 min (ícone Moon)
+- Atalhos de teclado: Space, ←/→, M, Escape
+- Título do separador: `♪ Artista — Título` durante reprodução
+- Ordenação na Biblioteca: Artista / A-Z / Reproduções / Recentes
+- Vista Stats: faixas, artistas, reproduções, duração, favoritas, top 5 faixas e artistas
+- Vista Definições: crossfade, qualidade padrão
+- PlaylistCover: mosaico 2×2 de capas das faixas
+
+---
+
 ## [2.0.0] - 2026-05-01
 
 ### Adicionado

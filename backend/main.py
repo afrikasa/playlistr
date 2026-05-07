@@ -565,6 +565,14 @@ if FRONTEND_BUILD.exists():
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
+    @app.get("/sw.js")
+    async def serve_sw():
+        return FileResponse(
+            str(FRONTEND_BUILD / "sw.js"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+
     @app.get("/{full_path:path}")
     async def serve_react(full_path: str):
         file = FRONTEND_BUILD / full_path

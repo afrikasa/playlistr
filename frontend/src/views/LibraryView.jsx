@@ -1,12 +1,24 @@
-import { useEffect, useRef, useState } from "react";
-import { Heart, ListEnd, ListMusic, Mic2, MoreHorizontal, Music2, Play, RefreshCw, Disc3, ChevronDown, ChevronRight } from "lucide-react";
+﻿import { useEffect, useRef, useState } from "react";
+import { Download, Heart, ListEnd, ListMusic, Mic2, MoreHorizontal, Music2, Play, RefreshCw, Disc3, ChevronDown, ChevronRight, Smartphone, WifiOff } from "lucide-react";
 import axios from "axios";
+import { assetUrl } from "../utils/apiBase";
 import { PlaylistsView } from "./PlaylistsView";
+import { LocalView } from "./LocalView";
+
+const LIB_CACHE_KEY = "playlistr_lib_cache";
+
+function saveLibCache(tracks, recent, top) {
+    try { localStorage.setItem(LIB_CACHE_KEY, JSON.stringify({ tracks, recent, top })); } catch (_) {}
+}
+function loadLibCache() {
+    try { return JSON.parse(localStorage.getItem(LIB_CACHE_KEY) || "null"); } catch { return null; }
+}
 
 export function LibraryView({ onPlay, onAddToQueue }) {
     const [mode, setMode] = useState("all");
     const [tracks, setTracks] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [offline, setOffline] = useState(false);
     const [search, setSearch] = useState("");
     const [openGroup, setOpenGroup] = useState(null);
     const [artistImages, setArtistImages] = useState({});
@@ -30,7 +42,18 @@ export function LibraryView({ onPlay, onAddToQueue }) {
             setLikedSet(new Set(t.filter(x => x.liked).map(x => x.path)));
             setRecentTracks(recRes.data.tracks || []);
             setMostPlayed(topRes.data.tracks || []);
-        } catch (_) {}
+            setOffline(false);
+            saveLibCache(t, recRes.data.tracks || [], topRes.data.tracks || []);
+        } catch (_) {
+            const cached = loadLibCache();
+            if (cached) {
+                setTracks(cached.tracks || []);
+                setLikedSet(new Set((cached.tracks || []).filter(x => x.liked).map(x => x.path)));
+                setRecentTracks(cached.recent || []);
+                setMostPlayed(cached.top || []);
+                setOffline(true);
+            }
+        }
         setLoading(false);
     };
 
@@ -74,6 +97,15 @@ export function LibraryView({ onPlay, onAddToQueue }) {
             <div className="space-y-4 fade-up">
                 <ModeToggle mode={mode} setMode={setMode} />
                 <PlaylistsView onPlay={onPlay} />
+            </div>
+        );
+    }
+
+    if (mode === "local") {
+        return (
+            <div className="space-y-4 fade-up">
+                <ModeToggle mode={mode} setMode={setMode} />
+                <LocalView onPlay={onPlay} onAddToQueue={onAddToQueue} />
             </div>
         );
     }
@@ -141,6 +173,12 @@ export function LibraryView({ onPlay, onAddToQueue }) {
     return (
         <div className="space-y-4 fade-up">
             <ModeToggle mode={mode} setMode={setMode} />
+            {offline && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+                    <WifiOff className="w-3.5 h-3.5 shrink-0" />
+                    <span>Servidor offline — a mostrar biblioteca em cache</span>
+                </div>
+            )}
             {recentTracks.length > 0 && (
                 <HorizontalSection title="Recentes" tracks={recentTracks} onPlay={(t) => onPlay([t], 0)} />
             )}
@@ -244,7 +282,7 @@ function filterGroups(groups, search) {
 
 // ── Context menu ───────────────────────────────────────────────────
 
-function TrackMenu({ liked, onToggleLike, onAddToQueue, onClose, path }) {
+function TrackMenu({ liked, onToggleLike, onAddToQueue, onClose, path, title, artist }) {
     const ref = useRef(null);
     const [playlists, setPlaylists] = useState([]);
     const [showPlaylists, setShowPlaylists] = useState(false);
@@ -265,6 +303,16 @@ function TrackMenu({ liked, onToggleLike, onAddToQueue, onClose, path }) {
         onClose();
     };
 
+    const downloadTrack = () => {
+        const a = document.createElement("a");
+        a.href = assetUrl(`/files/${path}`);
+        a.download = `${artist ? artist + " - " : ""}${title || "faixa"}.mp3`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        onClose();
+    };
+
     return (
         <div ref={ref} className="absolute right-0 top-full mt-1 z-50 bg-[#282828] border border-white/10 rounded-xl shadow-2xl py-1 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
             {onAddToQueue && (
@@ -278,6 +326,11 @@ function TrackMenu({ liked, onToggleLike, onAddToQueue, onClose, path }) {
                 className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-white/5 transition-colors text-left">
                 <Heart className={`w-4 h-4 ${liked ? "fill-red-500 text-red-500" : "text-neutral-400"}`} />
                 {liked ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+            </button>
+            <button onClick={downloadTrack}
+                className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-white/5 transition-colors text-left">
+                <Download className="w-4 h-4 text-neutral-400" />
+                Descarregar para o telemóvel
             </button>
             {playlists.length > 0 && (
                 <div className="border-t border-white/10 mt-1 pt-1">
@@ -358,7 +411,7 @@ function GroupedList({ groups, openGroup, setOpenGroup, onPlay, onAddToQueue, li
                                 {externalImg ? (
                                     <img src={externalImg} alt="" className={imgClass} onError={(e) => { e.target.style.display = "none"; }} />
                                 ) : cover ? (
-                                    <img src={`/cover/${cover.path}`} alt="" className={imgClass} onError={(e) => { e.target.style.display = "none"; }} />
+                                    <img src={assetUrl(`/cover/${cover.path}`)} alt="" className={imgClass} onError={(e) => { e.target.style.display = "none"; }} />
                                 ) : icon}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -394,7 +447,7 @@ function GroupedList({ groups, openGroup, setOpenGroup, onPlay, onAddToQueue, li
                                                 >
                                                     <div className="w-8 h-8 rounded-md overflow-hidden bg-white/5 flex items-center justify-center flex-shrink-0">
                                                         {albumCover ? (
-                                                            <img src={`/cover/${albumCover.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                                            <img src={assetUrl(`/cover/${albumCover.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                                                         ) : <Disc3 className="w-3.5 h-3.5 text-neutral-600" />}
                                                     </div>
                                                     <div className="flex-1 min-w-0">
@@ -460,7 +513,7 @@ function TrackRow({ track, onPlay, onAddToQueue, onToggleLike, liked, label }) {
             >
                 <div className="relative w-8 h-8 rounded-md overflow-hidden bg-white/5 flex-shrink-0">
                     {track.has_cover ? (
-                        <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                        <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center"><Music2 className="w-3 h-3 text-neutral-600" /></div>
                     )}
@@ -488,7 +541,7 @@ function TrackRow({ track, onPlay, onAddToQueue, onToggleLike, liked, label }) {
                     <button onClick={(e) => { e.stopPropagation(); setMenuOpen(m => !m); }} className="p-1 rounded-md text-neutral-500 hover:text-white hover:bg-white/10 transition-colors">
                         <MoreHorizontal className="w-3.5 h-3.5" />
                     </button>
-                    {menuOpen && <TrackMenu liked={liked} onToggleLike={onToggleLike} onAddToQueue={onAddToQueue} onClose={() => setMenuOpen(false)} path={track.path} />}
+                    {menuOpen && <TrackMenu liked={liked} onToggleLike={onToggleLike} onAddToQueue={onAddToQueue} onClose={() => setMenuOpen(false)} path={track.path} title={track.title} artist={track.artist} />}
                 </div>
             </div>
         </div>
@@ -506,7 +559,7 @@ function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked }) {
             >
                 <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
                     {track.has_cover ? (
-                        <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                        <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                     ) : (
                         <div className="w-full h-full flex items-center justify-center"><Music2 className="w-4 h-4 text-neutral-600" /></div>
                     )}
@@ -536,7 +589,7 @@ function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked }) {
                     <button onClick={(e) => { e.stopPropagation(); setMenuOpen(m => !m); }} className="p-1 rounded-md text-neutral-500 hover:text-white hover:bg-white/10 transition-colors">
                         <MoreHorizontal className="w-4 h-4" />
                     </button>
-                    {menuOpen && <TrackMenu liked={liked} onToggleLike={onToggleLike} onAddToQueue={onAddToQueue} onClose={() => setMenuOpen(false)} path={track.path} />}
+                    {menuOpen && <TrackMenu liked={liked} onToggleLike={onToggleLike} onAddToQueue={onAddToQueue} onClose={() => setMenuOpen(false)} path={track.path} title={track.title} artist={track.artist} />}
                 </div>
             </div>
         </div>
@@ -564,7 +617,7 @@ function TrackCard({ track, onPlay }) {
         >
             <div className="relative w-24 h-24 rounded-xl overflow-hidden bg-white/5 mb-1.5">
                 {track.has_cover
-                    ? <img src={`/cover/${track.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                    ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                     : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-8 h-8 text-neutral-700" /></div>}
                 <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-xl">
                     <Play className="w-7 h-7 text-white fill-white" />
@@ -592,6 +645,7 @@ function ModeToggle({ mode, setMode }) {
         { key: "artists",  label: "Artistas", short: "Art.", icon: <Mic2 className="w-3.5 h-3.5" /> },
         { key: "albums",   label: "Álbuns",   short: "Álb.", icon: <Disc3 className="w-3.5 h-3.5" /> },
         { key: "playlists",label: "Playlists",short: "PL",   icon: <ListMusic className="w-3.5 h-3.5" /> },
+        { key: "local",    label: "Local",    short: "Local",icon: <Smartphone className="w-3.5 h-3.5" /> },
     ];
     return (
         <div className="flex gap-1 bg-white/[0.04] rounded-xl p-1 border border-white/10">
@@ -609,3 +663,4 @@ function ModeToggle({ mode, setMode }) {
         </div>
     );
 }
+

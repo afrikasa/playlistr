@@ -571,7 +571,7 @@ def download_as_mp3(
     ]
     # Só passa --ffmpeg-location se for um caminho explícito (não comando no PATH)
     if len(FFMPEG_PATH) > 20 or "/" in FFMPEG_PATH or "\\" in FFMPEG_PATH:
-        cmd = cmd[:5] + ["--ffmpeg-location", FFMPEG_PATH] + cmd[5:]
+        cmd = cmd[:-1] + ["--ffmpeg-location", FFMPEG_PATH] + [cmd[-1]]
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,

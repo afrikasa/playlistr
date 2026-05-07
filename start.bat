@@ -27,10 +27,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM ── Tailscale Serve (HTTPS externo via Tailscale)
+echo [3/4] A configurar Tailscale Serve...
+"C:\Program Files\Tailscale\tailscale.exe" serve reset >nul 2>&1
+start "" /B "C:\Program Files\Tailscale\tailscale.exe" serve 8000
+
 REM ── Iniciar backend em janela separada
-echo [3/3] A iniciar servidor...
+echo [4/4] A iniciar servidor...
 cd /d "%BACKEND_DIR%"
-start "Playlistr" "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port 8000
+start "Playlistr" "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 REM ── Abrir browser apos o servidor arrancar
 timeout /t 2 /nobreak >nul
@@ -38,6 +43,7 @@ start "" "http://localhost:8000"
 
 echo.
 echo  Playlistr em http://localhost:8000
+echo  Telemovel: https://afrikaspc.tail886d5c.ts.net
 echo  Fecha a janela "Playlistr" para parar o servidor.
 echo.
 pause

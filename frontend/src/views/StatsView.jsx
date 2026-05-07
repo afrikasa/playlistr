@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
+import { assetUrl } from "../utils/apiBase";
 import { BarChart2, Clock, Heart, Mic2, Music2, Play } from "lucide-react";
 import axios from "axios";
 
@@ -54,7 +55,7 @@ export function StatsView() {
                                 <span className="text-sm font-bold text-neutral-600 w-5 text-center">{i + 1}</span>
                                 <div className="w-9 h-9 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
                                     {t.has_cover
-                                        ? <img src={`/cover/${t.path}`} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                        ? <img src={assetUrl(`/cover/${t.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
                                         : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-4 h-4 text-neutral-700" /></div>}
                                 </div>
                                 <div className="flex-1 min-w-0">
@@ -119,3 +120,4 @@ function fmtDuration(secs) {
     if (h > 0) return `${h}h ${m}m`;
     return `${m} min`;
 }
+

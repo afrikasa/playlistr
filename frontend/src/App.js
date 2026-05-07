@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Music4, Github, Download, Library, BarChart2, Settings } from "lucide-react";
+import { Music4, Github, Download, Library, BarChart2, Settings, WifiOff } from "lucide-react";
 import "@/App.css";
 import "@/index.css";
 import { HomeView } from "./views/HomeView";
@@ -12,8 +12,6 @@ import { Player } from "./components/Player";
 import { Toaster, toast } from "sonner";
 import axios from "axios";
 
-const API = "";
-
 export default function App() {
     const [tab, setTab] = useState("download"); // download | library | stats | settings
     const [phase, setPhase] = useState("home"); // home | downloading | completed
@@ -24,6 +22,13 @@ export default function App() {
         setSettings(next);
         localStorage.setItem("playlistr_settings", JSON.stringify(next));
     };
+
+    // URL base do backend — vazio = mesmo servidor (produção), ou URL remoto (Tailscale/servidor)
+    const apiBase = (settings.serverUrl || "").replace(/\/$/, "");
+    useEffect(() => {
+        axios.defaults.baseURL = apiBase || undefined;
+    }, [apiBase]);
+    const [serverOnline, setServerOnline] = useState(true);
     const [tracks, setTracks] = useState([]);
     const [activeIndex, setActiveIndex] = useState(0);
     const [statuses, setStatuses] = useState({});
@@ -32,6 +37,18 @@ export default function App() {
     const [playerIndex, setPlayerIndex] = useState(0);
     const [playerKey, setPlayerKey] = useState(0);
     const esRef = useRef(null);
+
+    // Verificar se o servidor está acessível
+    useEffect(() => {
+        const check = () => {
+            axios.get("/auth-status", { timeout: 3000 })
+                .then(() => setServerOnline(true))
+                .catch(() => setServerOnline(false));
+        };
+        check();
+        const id = setInterval(check, 30000);
+        return () => clearInterval(id);
+    }, [apiBase]);
 
     const closeSSE = () => {
         if (esRef.current) {
@@ -42,7 +59,7 @@ export default function App() {
 
     const subscribeToProgress = (trackList) => {
         closeSSE();
-        const es = new EventSource(`${API}/progress`);
+        const es = new EventSource(`${apiBase}/progress`);
         esRef.current = es;
 
         es.onmessage = (e) => {
@@ -91,7 +108,7 @@ export default function App() {
         setPhase("downloading");
 
         try {
-            const res = await axios.post(`${API}/download`, {
+            const res = await axios.post(`${apiBase}/download`, {
                 playlist_url: cfg.url,
                 ...(cfg.folder ? { output_dir: cfg.folder } : {}),
                 quality: cfg.quality,
@@ -99,7 +116,7 @@ export default function App() {
 
             if (res.data.error === "not_authenticated") {
                 setPhase("home");
-                window.location.href = `${API}/auth`;
+                window.location.href = `${apiBase}/auth`;
                 return;
             }
             if (res.data.error) {
@@ -233,6 +250,14 @@ export default function App() {
                         <span className="hidden sm:inline">v1.1</span>
                     </a>
                 </header>
+
+                {/* Banner offline */}
+                {!serverOnline && (
+                    <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+                        <WifiOff className="w-3.5 h-3.5 shrink-0" />
+                        <span>Servidor offline — funcionalidades limitadas</span>
+                    </div>
+                )}
 
                 {/* Tabs */}
                 <div className="flex gap-1 mb-4 bg-white/[0.03] rounded-2xl p-1 border border-white/10">

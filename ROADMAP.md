@@ -26,6 +26,24 @@
 - [x] Fila de reprodução com drag & drop
 - [x] UI mobile-friendly
 
-## Futuro (comercial / v3.0.0)
+## Concluído (v2.1.0)
+
+- [x] Equalizador Web Audio API (bass/mid/treble, presets)
+- [x] Visualizador de áudio (FFT)
+- [x] Crossfade configurável
+- [x] Sleep timer, atalhos de teclado, título do separador
+- [x] Ordenação e filtros na Biblioteca
+- [x] Vista Stats e Definições
+
+## Concluído (v2.2.0)
+
+- [x] PWA instalável com Service Worker offline
+- [x] Tab "Local" — música diretamente do telemóvel
+- [x] Multi-backend (Tailscale / IP remoto configurável)
+- [x] Modo offline com biblioteca em cache
+- [x] Tailscale Serve automático no start.bat
+
+## Futuro (v3.0.0)
 
 - [ ] Importar playlists do Windows Media Player / iTunes
+- [ ] Deployment no servidor Wyse (Linux) — servidor sempre ligado
