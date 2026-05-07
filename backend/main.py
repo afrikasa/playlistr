@@ -573,6 +573,29 @@ if FRONTEND_BUILD.exists():
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
+    @app.get("/reset-app")
+    async def reset_app():
+        html = """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>A atualizar...</title>
+        <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:16px}
+        .spin{width:40px;height:40px;border:3px solid #333;border-top-color:#1DB954;border-radius:50%;animation:s 1s linear infinite}
+        @keyframes s{to{transform:rotate(360deg)}}</style></head>
+        <body><div class="spin"></div><p>A atualizar a app...</p>
+        <script>
+        async function reset() {
+            if ('serviceWorker' in navigator) {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(regs.map(r => r.unregister()));
+            }
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+            location.replace('/');
+        }
+        reset();
+        </script></body></html>"""
+        return Response(content=html, media_type="text/html")
+
     @app.get("/{full_path:path}")
     async def serve_react(full_path: str):
         file = FRONTEND_BUILD / full_path

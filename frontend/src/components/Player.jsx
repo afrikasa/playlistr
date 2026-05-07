@@ -22,7 +22,7 @@ function makeShuffled(length, currentIdx) {
     return [currentIdx, ...rest];
 }
 
-export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
+export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackChange }) {
     const audioRef = useRef(null);
     const [order, setOrder] = useState(() => queue.map((_, i) => i));
     const [pos, setPos] = useState(initialIndex);
@@ -59,11 +59,15 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
     const bassNodeRef = useRef(null);
     const midNodeRef = useRef(null);
     const trebleNodeRef = useRef(null);
+    const orderRef = useRef(order);
+    const repeatRef = useRef(repeat);
 
     // Sincronizar refs com state e props
     useEffect(() => { volumeRef.current = volume; }, [volume]);
     useEffect(() => { mutedRef.current = muted; }, [muted]);
     useEffect(() => { xfadeSecsRef.current = xfadeSecs; }, [xfadeSecs]);
+    useEffect(() => { orderRef.current = order; }, [order]);
+    useEffect(() => { repeatRef.current = repeat; }, [repeat]);
 
     // Aplicar ganhos do equalizador
     useEffect(() => {
@@ -116,6 +120,18 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
     useEffect(() => {
         const audio = audioRef.current;
         if (!audio || !track) return;
+
+        // Actualizar Media Session ANTES de tocar — evita gap na notificação Android
+        if ("mediaSession" in navigator) {
+            navigator.mediaSession.playbackState = "playing";
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: track.title || "",
+                artist: track.artist || "",
+                album: track.album || "",
+                artwork: track.has_cover ? [{ src: assetUrl(`/cover/${track.path}`), sizes: "512x512", type: "image/jpeg" }] : [],
+            });
+        }
+
         clearInterval(xfadeIntervalRef.current);
         audio.src = track.blobUrl || assetUrl(`/files/${track.path}`);
         audio.load();
@@ -123,6 +139,12 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
         const wasFading = xfadeActive.current;
         audio.volume = wasFading ? 0 : vol;
         xfadeActive.current = false;
+
+        // Retomar AudioContext se suspenso (background → foreground)
+        if (audioCtxRef.current?.state === 'suspended') {
+            audioCtxRef.current.resume().catch(() => {});
+        }
+
         audio.play().then(() => {
             setIsPlaying(true);
             setupAudioCtx();
@@ -178,6 +200,22 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
         return () => { if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current); };
     }, [sleepMins]);
 
+    // Retomar AudioContext ao voltar ao primeiro plano (fix: app "reinicia" após Spotify)
+    useEffect(() => {
+        const onVisible = () => {
+            if (document.visibilityState === 'visible' && audioCtxRef.current?.state === 'suspended') {
+                audioCtxRef.current.resume().catch(() => {});
+            }
+        };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => document.removeEventListener('visibilitychange', onVisible);
+    }, []);
+
+    // Notificar App.js da faixa actual (para highlight na biblioteca)
+    useEffect(() => {
+        if (track?.path) onTrackChange?.(track.path);
+    }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Crescimento da fila (add-to-queue externo)
     useEffect(() => {
         if (queue.length > prevQueueLen.current) {
@@ -187,27 +225,47 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
         prevQueueLen.current = queue.length;
     }, [queue.length]);
 
-    // Media Session API — metadados
+    // Media Session API — handlers e metadados
     useEffect(() => {
         if (!("mediaSession" in navigator) || !track) return;
+        // Metadata já definida no efeito de carregamento — redefinir aqui garante consistência
         navigator.mediaSession.metadata = new MediaMetadata({
             title: track.title || "",
             artist: track.artist || "",
             album: track.album || "",
             artwork: track.has_cover ? [{ src: assetUrl(`/cover/${track.path}`), sizes: "512x512", type: "image/jpeg" }] : [],
         });
-        navigator.mediaSession.setActionHandler("play", () => audioRef.current?.play());
-        navigator.mediaSession.setActionHandler("pause", () => audioRef.current?.pause());
-        navigator.mediaSession.setActionHandler("previoustrack", () => setPos(p => Math.max(0, p - 1)));
-        navigator.mediaSession.setActionHandler("nexttrack", () => setPos(p => Math.min(order.length - 1, p + 1)));
-        navigator.mediaSession.setActionHandler("seekto", (d) => { if (audioRef.current) audioRef.current.currentTime = d.seekTime; });
-    }, [track, order.length]);
-
-    // Media Session API — estado de reprodução
-    useEffect(() => {
-        if (!("mediaSession" in navigator)) return;
-        navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
-    }, [isPlaying]);
+        const resumeCtx = () => {
+            if (audioCtxRef.current?.state === 'suspended') audioCtxRef.current.resume().catch(() => {});
+        };
+        // Handlers usam refs para evitar closures stale (fix: botões lockscreen precisam de pressão forte)
+        navigator.mediaSession.setActionHandler("play", () => {
+            resumeCtx();
+            audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
+        });
+        navigator.mediaSession.setActionHandler("pause", () => { audioRef.current?.pause(); });
+        navigator.mediaSession.setActionHandler("previoustrack", () => {
+            resumeCtx();
+            setPos(p => {
+                const len = orderRef.current.length;
+                if (p > 0) return p - 1;
+                if (repeatRef.current === "all") return len - 1;
+                return p;
+            });
+        });
+        navigator.mediaSession.setActionHandler("nexttrack", () => {
+            resumeCtx();
+            setPos(p => {
+                const len = orderRef.current.length;
+                if (p < len - 1) return p + 1;
+                if (repeatRef.current === "all") return 0;
+                return p;
+            });
+        });
+        navigator.mediaSession.setActionHandler("seekto", (d) => {
+            if (audioRef.current) audioRef.current.currentTime = d.seekTime;
+        });
+    }, [track]); // order e repeat acedidos via ref — sem re-registar desnecessariamente
 
     // Registar reprodução (play count + recentes)
     useEffect(() => {
@@ -247,8 +305,16 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
     const togglePlay = useCallback(() => {
         const audio = audioRef.current;
         if (!audio) return;
-        if (isPlaying) { audio.pause(); setIsPlaying(false); }
-        else audio.play().then(() => setIsPlaying(true)).catch(() => {});
+        // Retomar AudioContext suspenso antes de tentar reproduzir
+        if (audioCtxRef.current?.state === 'suspended') audioCtxRef.current.resume().catch(() => {});
+        if (isPlaying) {
+            audio.pause();
+            setIsPlaying(false);
+        } else {
+            // Se o audio está em estado de erro, recarregar antes de tentar
+            if (audio.error) audio.load();
+            audio.play().then(() => setIsPlaying(true)).catch(() => {});
+        }
     }, [isPlaying]);
 
     // Atalhos de teclado
@@ -490,8 +556,15 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3 }) {
                     onTimeUpdate={handleTimeUpdate}
                     onLoadedMetadata={(e) => { const d = e.target.duration; setDuration(d); durationRef.current = d; }}
                     onEnded={handleEnded}
-                    onPlay={() => setIsPlaying(true)}
-                    onPause={() => setIsPlaying(false)}
+                    onPlay={() => {
+                        setIsPlaying(true);
+                        if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
+                    }}
+                    onPause={() => {
+                        setIsPlaying(false);
+                        if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+                    }}
+                    onError={() => setIsPlaying(false)}
                 />
 
                 <div className="max-w-3xl mx-auto flex items-center gap-2 sm:gap-4">

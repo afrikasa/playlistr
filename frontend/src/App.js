@@ -36,6 +36,7 @@ export default function App() {
     const [playerQueue, setPlayerQueue] = useState(null); // null = player oculto
     const [playerIndex, setPlayerIndex] = useState(0);
     const [playerKey, setPlayerKey] = useState(0);
+    const [currentPath, setCurrentPath] = useState(null);
     const esRef = useRef(null);
 
     // Verificar se o servidor está acessível
@@ -243,11 +244,11 @@ export default function App() {
                         href="https://github.com/afrikasa/playlistr"
                         target="_blank"
                         rel="noreferrer"
-                        className="text-neutral-500 hover:text-white transition-colors flex items-center gap-1.5 text-xs"
+                        className="text-neutral-400 hover:text-white transition-colors flex items-center gap-1.5 text-xs"
                         data-testid="header-github-link"
                     >
                         <Github className="w-4 h-4" />
-                        <span className="hidden sm:inline">v1.1</span>
+                        <span className="px-1.5 py-0.5 rounded-md bg-white/8 text-neutral-300 font-mono">v2.2.0</span>
                     </a>
                 </header>
 
@@ -288,7 +289,7 @@ export default function App() {
                     data-testid="app-main-panel"
                 >
                     {tab === "library" && (
-                        <LibraryView onPlay={handlePlay} onAddToQueue={handleAddToQueue} />
+                        <LibraryView onPlay={handlePlay} onAddToQueue={handleAddToQueue} currentPath={currentPath} />
                     )}
 
                     {tab === "stats" && <StatsView />}
@@ -347,6 +348,7 @@ export default function App() {
                     initialIndex={playerIndex}
                     xfadeSecs={settings.xfadeSecs ?? 3}
                     onClose={() => setPlayerQueue(null)}
+                    onTrackChange={setCurrentPath}
                 />
             )}
         </div>

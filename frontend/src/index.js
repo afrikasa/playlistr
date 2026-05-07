@@ -16,20 +16,16 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker
       .register("/sw.js")
       .then((reg) => {
-        // Verificar atualizações de hora a hora
+        // Forçar verificação de update em cada visita
+        reg.update();
+        // Verificar de hora a hora
         setInterval(() => reg.update(), 60 * 60 * 1000);
-
-        reg.addEventListener("updatefound", () => {
-          const newWorker = reg.installing;
-          newWorker?.addEventListener("statechange", () => {
-            if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-              // Nova versão disponível — recarregar para aplicar
-              newWorker.postMessage({ type: "SKIP_WAITING" });
-              window.location.reload();
-            }
-          });
-        });
       })
       .catch(() => {});
+
+    // Recarregar quando o SW activo mudar (novo SW tomou controlo via skipWaiting + clients.claim)
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      window.location.reload();
+    });
   });
 }

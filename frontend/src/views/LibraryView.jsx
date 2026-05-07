@@ -14,7 +14,7 @@ function loadLibCache() {
     try { return JSON.parse(localStorage.getItem(LIB_CACHE_KEY) || "null"); } catch { return null; }
 }
 
-export function LibraryView({ onPlay, onAddToQueue }) {
+export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
     const [mode, setMode] = useState("all");
     const [tracks, setTracks] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -240,6 +240,7 @@ export function LibraryView({ onPlay, onAddToQueue }) {
                                     key={track.path}
                                     track={track}
                                     liked={likedSet.has(track.path)}
+                                    isPlaying={currentPath === track.path}
                                     onPlay={() => onPlay(sorted, i)}
                                     onAddToQueue={onAddToQueue ? () => onAddToQueue([track]) : null}
                                     onToggleLike={(e) => toggleLike(track.path, e)}
@@ -548,11 +549,11 @@ function TrackRow({ track, onPlay, onAddToQueue, onToggleLike, liked, label }) {
     );
 }
 
-function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked }) {
+function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked, isPlaying }) {
     const [menuOpen, setMenuOpen] = useState(false);
 
     return (
-        <div className="relative group">
+        <div className={`relative group rounded-xl transition-colors ${isPlaying ? "bg-[#1DB954]/8" : ""}`}>
             <button
                 onClick={onPlay}
                 className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors text-left"
@@ -563,12 +564,23 @@ function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked }) {
                     ) : (
                         <div className="w-full h-full flex items-center justify-center"><Music2 className="w-4 h-4 text-neutral-600" /></div>
                     )}
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-lg">
-                        <Play className="w-4 h-4 text-white fill-white" />
-                    </div>
+                    {isPlaying ? (
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center rounded-lg">
+                            <div className="flex gap-0.5 items-end h-4">
+                                {[0, 1, 2].map(b => (
+                                    <div key={b} className="w-0.5 bg-[#1DB954] rounded-full animate-bounce"
+                                        style={{ height: `${[8, 12, 6][b]}px`, animationDelay: `${b * 0.15}s` }} />
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-lg">
+                            <Play className="w-4 h-4 text-white fill-white" />
+                        </div>
+                    )}
                 </div>
                 <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate leading-tight">{track.title}</p>
+                    <p className={`text-sm font-medium truncate leading-tight ${isPlaying ? "text-[#1DB954]" : ""}`}>{track.title}</p>
                     <p className="text-xs text-neutral-500 truncate mt-0.5">
                         {track.artist || "Artista desconhecido"}{track.album ? ` · ${track.album}` : ""}
                     </p>
