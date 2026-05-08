@@ -184,12 +184,10 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
         }
 
         clearInterval(xfadeIntervalRef.current);
+        xfadeActive.current = false;
         audio.src = track.blobUrl || assetUrl(`/files/${track.path}`);
         audio.load();
-        const vol = mutedRef.current ? 0 : volumeRef.current;
-        const wasFading = xfadeActive.current;
-        audio.volume = wasFading ? 0 : vol;
-        xfadeActive.current = false;
+        audio.volume = mutedRef.current ? 0 : volumeRef.current;
 
         // Retomar AudioContext se suspenso (background → foreground)
         if (audioCtxRef.current?.state === 'suspended') {
@@ -199,15 +197,6 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
         audio.play().then(() => {
             setIsPlaying(true);
             setupAudioCtx();
-            if (wasFading && vol > 0) {
-                let step = 0;
-                const steps = (xfadeSecsRef.current || 3) * 10;
-                const iv = setInterval(() => {
-                    step++;
-                    if (!audio.paused) audio.volume = Math.min(vol, vol * step / steps);
-                    if (step >= steps) clearInterval(iv);
-                }, 100);
-            }
         }).catch(() => setIsPlaying(false));
     }, [pos, order, setupAudioCtx]); // eslint-disable-line react-hooks/exhaustive-deps
 
