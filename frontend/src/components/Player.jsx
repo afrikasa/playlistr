@@ -1,10 +1,24 @@
 ﻿import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, ChevronDown, GripVertical, Heart, ListMusic, Moon, Music2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Volume2, VolumeX, X } from "lucide-react";
+import { Activity, ChevronDown, GripVertical, Heart, ListMusic, Mic2, Moon, Music2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Volume2, VolumeX, X } from "lucide-react";
 import axios from "axios";
 import { extractDominantColor } from "../utils/colorExtract";
 import { assetUrl } from "../utils/apiBase";
 
 const SLEEP_OPTIONS = [0, 15, 30, 45, 60];
+
+function parseSyncedLyrics(lrc) {
+    if (!lrc) return null;
+    const lines = [];
+    for (const line of lrc.split("\n")) {
+        const m = line.match(/^\[(\d{2}):(\d{2}(?:\.\d+)?)\](.*)/);
+        if (m) {
+            const t = parseInt(m[1]) * 60 + parseFloat(m[2]);
+            const text = m[3].trim();
+            if (text) lines.push({ t, text });
+        }
+    }
+    return lines.length > 0 ? lines : null;
+}
 
 const EQ_PRESETS = {
     plano:  [0, 0, 0],
@@ -42,6 +56,9 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
     const [dragOver, setDragOver] = useState(null);
     const [eqGains, setEqGains] = useState([0, 0, 0]); // bass, mid, treble (dB)
     const [showEQ, setShowEQ] = useState(false);
+    const [lyrics, setLyrics] = useState(null); // null=loading, {found,lines,plain}
+    const [showLyrics, setShowLyrics] = useState(false);
+    const [currentLyricIdx, setCurrentLyricIdx] = useState(-1);
 
     // refs que não causam re-render
     const dragIdxRef = useRef(null);
@@ -273,6 +290,21 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
         axios.post("/library/play", { path: track.path }).catch(() => {});
     }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Buscar letras ao mudar de faixa
+    useEffect(() => {
+        if (!track?.title) { setLyrics(null); setCurrentLyricIdx(-1); return; }
+        setLyrics(null);
+        setCurrentLyricIdx(-1);
+        axios.get("/lyrics", { params: { title: track.title, artist: track.artist || "" } })
+            .then((r) => {
+                const d = r.data;
+                if (!d.found) { setLyrics({ found: false }); return; }
+                const lines = parseSyncedLyrics(d.synced);
+                setLyrics({ found: true, lines, plain: d.plain });
+            })
+            .catch(() => setLyrics({ found: false }));
+    }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const handleEnded = useCallback(() => {
         if (repeat === "one") {
             const audio = audioRef.current;
@@ -363,6 +395,16 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
         const t = e.target.currentTime;
         setCurrentTime(t);
 
+        // Sincronizar linha de letras
+        const lines = lyrics?.lines;
+        if (lines?.length) {
+            let idx = -1;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].t <= t) idx = i; else break;
+            }
+            setCurrentLyricIdx(idx);
+        }
+
         // Actualizar posição no Media Session
         if ("mediaSession" in navigator && durationRef.current > 0) {
             try {
@@ -430,6 +472,10 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
                     crossfade={crossfade}
                     xfadeSecs={xfadeSecs}
                     analyserRef={analyserRef}
+                    lyrics={lyrics}
+                    currentLyricIdx={currentLyricIdx}
+                    showLyrics={showLyrics}
+                    onToggleLyrics={() => setShowLyrics(l => !l)}
                     onClose={() => setShowNowPlaying(false)}
                     onTogglePlay={togglePlay}
                     onPrev={goPrev}
@@ -687,7 +733,15 @@ function Visualizer({ analyserRef }) {
 
 // ── Now Playing overlay ───────────────────────────────────────────
 
-function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, duration, pct, shuffle, repeat, canPrev, canNext, volume, muted, crossfade, xfadeSecs, analyserRef, onClose, onTogglePlay, onPrev, onNext, onSeek, onToggleShuffle, onCycleRepeat, onToggleLike, onToggleCrossfade, onVolume, onToggleMute, fmt }) {
+function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, duration, pct, shuffle, repeat, canPrev, canNext, volume, muted, crossfade, xfadeSecs, analyserRef, lyrics, currentLyricIdx, showLyrics, onToggleLyrics, onClose, onTogglePlay, onPrev, onNext, onSeek, onToggleShuffle, onCycleRepeat, onToggleLike, onToggleCrossfade, onVolume, onToggleMute, fmt }) {
+    const lyricRef = useRef(null);
+    // Auto-scroll para a linha actual
+    useEffect(() => {
+        if (lyricRef.current && showLyrics) {
+            lyricRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+    }, [currentLyricIdx, showLyrics]);
+
     const gradient = accentColor
         ? `linear-gradient(180deg, ${accentColor}cc 0%, #0e0e0e 58%, #080808 100%)`
         : "linear-gradient(180deg, #1e1e1e 0%, #080808 100%)";
@@ -703,15 +757,46 @@ function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, durat
                     <ChevronDown className="w-6 h-6" />
                 </button>
                 <p className="text-xs font-semibold tracking-widest uppercase text-neutral-400">A reproduzir</p>
-                <div className="w-7" />
+                <button
+                    onClick={onToggleLyrics}
+                    disabled={!lyrics || !lyrics.found}
+                    title={lyrics?.found ? (showLyrics ? "Ver capa" : "Ver letras") : "Letras não disponíveis"}
+                    className={`p-1 transition-colors ${showLyrics ? "text-[#1DB954]" : lyrics?.found ? "text-neutral-400 hover:text-white" : "text-neutral-700 cursor-default"}`}
+                >
+                    <Mic2 className="w-5 h-5" />
+                </button>
             </div>
 
-            {/* Capa grande */}
-            <div className="w-full max-w-xs aspect-square rounded-2xl overflow-hidden shadow-[0_30px_80px_rgba(0,0,0,0.7)] mt-4">
-                {track?.has_cover
-                    ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
-                    : <div className="w-full h-full bg-white/5 flex items-center justify-center"><Music2 className="w-20 h-20 text-neutral-700" /></div>}
-            </div>
+            {/* Capa grande ou letras */}
+            {!showLyrics ? (
+                <div className="w-full max-w-xs aspect-square rounded-2xl overflow-hidden shadow-[0_30px_80px_rgba(0,0,0,0.7)] mt-4">
+                    {track?.has_cover
+                        ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                        : <div className="w-full h-full bg-white/5 flex items-center justify-center"><Music2 className="w-20 h-20 text-neutral-700" /></div>}
+                </div>
+            ) : (
+                <div className="w-full max-w-sm mt-4 flex-1 overflow-y-auto max-h-72 space-y-3 px-1" style={{ scrollbarWidth: "thin" }}>
+                    {lyrics?.lines ? lyrics.lines.map((line, i) => (
+                        <p
+                            key={i}
+                            ref={i === currentLyricIdx ? lyricRef : null}
+                            className={`text-center text-base leading-relaxed transition-all duration-300 ${
+                                i === currentLyricIdx
+                                    ? "text-white font-bold scale-105 origin-center"
+                                    : i < currentLyricIdx
+                                    ? "text-neutral-600 text-sm"
+                                    : "text-neutral-500 text-sm"
+                            }`}
+                        >
+                            {line.text}
+                        </p>
+                    )) : lyrics?.plain ? (
+                        <p className="text-center text-sm text-neutral-400 whitespace-pre-line leading-relaxed">{lyrics.plain}</p>
+                    ) : (
+                        <p className="text-center text-sm text-neutral-600 py-8">Letras não disponíveis</p>
+                    )}
+                </div>
+            )}
 
             {/* Info + like */}
             <div className="w-full max-w-sm mt-5">

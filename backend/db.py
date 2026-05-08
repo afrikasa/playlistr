@@ -246,6 +246,45 @@ def get_stats() -> dict:
     }
 
 
+def get_smart_playlists() -> list[dict]:
+    """Playlists geradas automaticamente a partir dos dados da biblioteca."""
+    from datetime import datetime, timedelta
+    with _conn() as con:
+        never = con.execute(
+            "SELECT path,title,artist,album,duration,has_cover,liked,play_count FROM tracks "
+            "WHERE play_count = 0 ORDER BY added_at DESC LIMIT 50"
+        ).fetchall()
+        favorites = con.execute(
+            "SELECT path,title,artist,album,duration,has_cover,liked,play_count FROM tracks "
+            "WHERE liked = 1 ORDER BY play_count DESC"
+        ).fetchall()
+        recent = con.execute(
+            "SELECT path,title,artist,album,duration,has_cover,liked,play_count FROM tracks "
+            "ORDER BY added_at DESC LIMIT 30"
+        ).fetchall()
+        week_ago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+        week_top = con.execute("""
+            SELECT t.path, t.title, t.artist, t.album, t.duration, t.has_cover, t.liked,
+                   COUNT(r.id) as play_count
+            FROM tracks t JOIN recent_plays r ON t.path = r.path
+            WHERE r.played_at >= ?
+            GROUP BY t.path ORDER BY play_count DESC LIMIT 25
+        """, (week_ago,)).fetchall()
+        month_ago = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
+        forgotten = con.execute(
+            "SELECT path,title,artist,album,duration,has_cover,liked,play_count FROM tracks "
+            "WHERE added_at < ? AND play_count < 3 ORDER BY RANDOM() LIMIT 25",
+            (month_ago,)
+        ).fetchall()
+    return [
+        {"id": "never",        "name": "Nunca Ouvidas",          "desc": "Ainda por descobrir",                 "tracks": [dict(r) for r in never]},
+        {"id": "favorites",    "name": "Favoritas",               "desc": "As que marcaste com coração",         "tracks": [dict(r) for r in favorites]},
+        {"id": "recent_added", "name": "Adicionadas Recentemente","desc": "As últimas 30 músicas",               "tracks": [dict(r) for r in recent]},
+        {"id": "week_top",     "name": "Top da Semana",           "desc": "Mais ouvidas nos últimos 7 dias",     "tracks": [dict(r) for r in week_top]},
+        {"id": "forgotten",    "name": "Esquecidas",              "desc": "Pouco ouvidas há mais de 30 dias",    "tracks": [dict(r) for r in forgotten]},
+    ]
+
+
 def scan_and_index(downloads_dir: Path) -> int:
     """Varre downloads_dir, indexa MP3s novos e remove registos de ficheiros apagados."""
     from mutagen.id3 import ID3, ID3NoHeaderError

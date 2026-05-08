@@ -654,18 +654,19 @@ def process_track(
         log.info("  ↩️  Já existe, a saltar.")
         return True
 
-    # 1. Pesquisa no YouTube
-    query = f"{artist} {title} audio"
-    yt_url = None
-    for attempt in range(1, SEARCH_RETRIES + 1):
-        yt_url = search_youtube(query)
-        if yt_url:
-            break
-        log.warning("  Tentativa %d/%d falhou, a retentar…", attempt, SEARCH_RETRIES)
-        time.sleep(2)
+    # 1. Usar URL pré-fornecida (import directo) ou pesquisar no YouTube
+    yt_url = track.get("_yt_url") or None
+    if not yt_url:
+        query = f"{artist} {title} audio"
+        for attempt in range(1, SEARCH_RETRIES + 1):
+            yt_url = search_youtube(query)
+            if yt_url:
+                break
+            log.warning("  Tentativa %d/%d falhou, a retentar…", attempt, SEARCH_RETRIES)
+            time.sleep(2)
 
     if not yt_url:
-        log.error("  ❌  Não encontrado no YouTube: %s", query)
+        log.error("  ❌  Não encontrado no YouTube: %s", f"{artist} {title}")
         return False
 
     log.info("  🔗  %s", yt_url)

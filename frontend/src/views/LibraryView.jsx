@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState } from "react";
-import { Download, Heart, ListEnd, ListMusic, Mic2, MoreHorizontal, Music2, Play, RefreshCw, Disc3, ChevronDown, ChevronRight, Smartphone, WifiOff } from "lucide-react";
+import { Download, Heart, ListEnd, ListMusic, Mic2, MoreHorizontal, Music2, Play, RefreshCw, Disc3, ChevronDown, ChevronRight, Smartphone, WifiOff, Sparkles } from "lucide-react";
 import axios from "axios";
 import { assetUrl } from "../utils/apiBase";
 import { PlaylistsView } from "./PlaylistsView";
@@ -106,6 +106,15 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
             <div className="space-y-4 fade-up">
                 <ModeToggle mode={mode} setMode={setMode} />
                 <LocalView onPlay={onPlay} onAddToQueue={onAddToQueue} />
+            </div>
+        );
+    }
+
+    if (mode === "smart") {
+        return (
+            <div className="space-y-4 fade-up">
+                <ModeToggle mode={mode} setMode={setMode} />
+                <SmartView onPlay={onPlay} onAddToQueue={onAddToQueue} />
             </div>
         );
     }
@@ -641,6 +650,98 @@ function TrackCard({ track, onPlay }) {
     );
 }
 
+// ── Smart Playlists ─────────────────────────────────────────────
+
+const SMART_COLORS = {
+    never:        "from-indigo-500/20 to-violet-500/10 border-indigo-500/20",
+    favorites:    "from-rose-500/20 to-pink-500/10 border-rose-500/20",
+    recent_added: "from-emerald-500/20 to-teal-500/10 border-emerald-500/20",
+    week_top:     "from-orange-500/20 to-yellow-500/10 border-orange-500/20",
+    forgotten:    "from-slate-500/20 to-gray-500/10 border-slate-500/20",
+};
+
+function SmartView({ onPlay, onAddToQueue }) {
+    const [playlists, setPlaylists] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [openId, setOpenId] = useState(null);
+
+    useEffect(() => {
+        axios.get("/smart-playlists")
+            .then((r) => setPlaylists(r.data.playlists || []))
+            .catch(() => {})
+            .finally(() => setLoading(false));
+    }, []);
+
+    if (loading) return (
+        <div className="flex items-center justify-center py-16">
+            <div className="w-6 h-6 rounded-full border-2 border-[#1DB954] border-t-transparent animate-spin" />
+        </div>
+    );
+
+    return (
+        <div className="space-y-3">
+            {playlists.map((pl) => {
+                const colorClass = SMART_COLORS[pl.id] || "from-neutral-500/20 to-neutral-500/10 border-neutral-500/20";
+                const isOpen = openId === pl.id;
+                const isEmpty = pl.tracks.length === 0;
+                return (
+                    <div key={pl.id} className={`rounded-2xl border bg-gradient-to-br ${colorClass} overflow-hidden`}>
+                        <button
+                            onClick={() => setOpenId(isOpen ? null : pl.id)}
+                            className="w-full flex items-center justify-between px-4 py-3.5 text-left"
+                        >
+                            <div>
+                                <p className="font-semibold text-sm text-white">{pl.name}</p>
+                                <p className="text-xs text-neutral-400 mt-0.5">{pl.desc} · {pl.tracks.length} faixas</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {!isEmpty && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); onPlay(pl.tracks, 0); }}
+                                        className="w-8 h-8 rounded-full bg-[#1DB954] flex items-center justify-center hover:scale-105 transition-transform"
+                                    >
+                                        <Play className="w-3.5 h-3.5 text-black fill-black ml-0.5" />
+                                    </button>
+                                )}
+                                <ChevronDown className={`w-4 h-4 text-neutral-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                            </div>
+                        </button>
+                        {isOpen && !isEmpty && (
+                            <div className="border-t border-white/[0.06] max-h-64 overflow-y-auto" style={{ scrollbarWidth: "thin" }}>
+                                {pl.tracks.map((t, i) => (
+                                    <div key={t.path} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.04] group">
+                                        <span className="text-[11px] text-neutral-600 w-5 text-right shrink-0">{i + 1}</span>
+                                        <div className="w-8 h-8 rounded overflow-hidden bg-white/5 shrink-0">
+                                            {t.has_cover
+                                                ? <img src={assetUrl(`/cover/${t.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                                : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-3 h-3 text-neutral-700" /></div>}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-medium truncate">{t.title}</p>
+                                            <p className="text-[11px] text-neutral-500 truncate">{t.artist}</p>
+                                        </div>
+                                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onClick={() => onPlay(pl.tracks, i)} className="p-1.5 rounded-lg hover:bg-white/10 text-neutral-400 hover:text-white transition-colors">
+                                                <Play className="w-3.5 h-3.5" />
+                                            </button>
+                                            <button onClick={() => onAddToQueue([t])} className="p-1.5 rounded-lg hover:bg-white/10 text-neutral-400 hover:text-white transition-colors">
+                                                <ListEnd className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {isOpen && isEmpty && (
+                            <p className="px-4 py-3 text-xs text-neutral-500 border-t border-white/[0.06]">Sem faixas nesta categoria ainda.</p>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 function EmptyState() {
     return (
         <div className="text-center py-16 text-neutral-500">
@@ -658,6 +759,7 @@ function ModeToggle({ mode, setMode }) {
         { key: "albums",   label: "Álbuns",   short: "Álb.", icon: <Disc3 className="w-3.5 h-3.5" /> },
         { key: "playlists",label: "Playlists",short: "PL",   icon: <ListMusic className="w-3.5 h-3.5" /> },
         { key: "local",    label: "Local",    short: "Local",icon: <Smartphone className="w-3.5 h-3.5" /> },
+        { key: "smart",    label: "Smart",    short: "Smart",icon: <Sparkles className="w-3.5 h-3.5" /> },
     ];
     return (
         <div className="flex gap-1 bg-white/[0.04] rounded-xl p-1 border border-white/10">

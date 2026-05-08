@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Music4, Github, Download, Library, BarChart2, Settings, WifiOff } from "lucide-react";
+import { Music4, Github, Download, Library, BarChart2, Settings, WifiOff, History } from "lucide-react";
 import "@/App.css";
 import "@/index.css";
 import { HomeView } from "./views/HomeView";
-import { ProgressView } from "./views/ProgressView";
-import { CompletedView } from "./views/CompletedView";
 import { LibraryView } from "./views/LibraryView";
 import { StatsView } from "./views/StatsView";
 import { SettingsView } from "./views/SettingsView";
+import { DownloadsView } from "./views/DownloadsView";
 import { Player } from "./components/Player";
 import { Toaster, toast } from "sonner";
 import axios from "axios";
@@ -33,11 +32,54 @@ export default function App() {
     const [activeIndex, setActiveIndex] = useState(0);
     const [statuses, setStatuses] = useState({});
     const [config, setConfig] = useState(null);
-    const [playerQueue, setPlayerQueue] = useState(null); // null = player oculto
-    const [playerIndex, setPlayerIndex] = useState(0);
+    const [playerQueue, setPlayerQueue] = useState(() => {
+        try {
+            const s = JSON.parse(sessionStorage.getItem("playlistr_queue") || "null");
+            return s?.queue?.length ? s.queue : null;
+        } catch { return null; }
+    });
+    const [playerIndex, setPlayerIndex] = useState(() => {
+        try { return JSON.parse(sessionStorage.getItem("playlistr_queue") || "null")?.index ?? 0; } catch { return 0; }
+    });
     const [playerKey, setPlayerKey] = useState(0);
     const [currentPath, setCurrentPath] = useState(null);
+    const [downloadHistory, setDownloadHistory] = useState(() => {
+        try { return JSON.parse(localStorage.getItem("playlistr_dl_history") || "[]"); } catch { return []; }
+    });
     const esRef = useRef(null);
+    const configRef = useRef(null);
+
+    // Manter configRef sincronizado para usar em closures SSE
+    useEffect(() => { configRef.current = config; }, [config]);
+
+    // Restaurar estado de download do sessionStorage ao arrancar
+    useEffect(() => {
+        try {
+            const saved = sessionStorage.getItem("playlistr_dl_state");
+            if (!saved) return;
+            const s = JSON.parse(saved);
+            if (s.phase && s.phase !== "home") {
+                setPhase(s.phase);
+                setTracks(s.tracks || []);
+                setStatuses(s.statuses || {});
+                setActiveIndex(s.activeIndex || 0);
+                setConfig(s.config || null);
+                setTab("downloads");
+                if (s.phase === "downloading") {
+                    subscribeToProgress(s.tracks || []);
+                }
+            }
+        } catch (_) {}
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Guardar estado de download no sessionStorage (sobrevive a mudanças de aba/reload)
+    useEffect(() => {
+        if (phase !== "home") {
+            sessionStorage.setItem("playlistr_dl_state", JSON.stringify({ phase, tracks, statuses, activeIndex, config }));
+        } else {
+            sessionStorage.removeItem("playlistr_dl_state");
+        }
+    }, [phase, tracks, statuses, activeIndex, config]);
 
     // Verificar se o servidor está acessível
     useEffect(() => {
@@ -79,6 +121,22 @@ export default function App() {
                 }
             } else if (event.type === "completed") {
                 closeSSE();
+                // Guardar no histórico
+                const cfg = configRef.current;
+                const entry = {
+                    id: Date.now(),
+                    date: new Date().toISOString(),
+                    playlistName: cfg?.url?.split("/playlist/")?.[1]?.split("?")?.[0] ?? "playlist",
+                    total: event.total,
+                    done: event.done,
+                    failed: event.failed ?? 0,
+                    skipped: event.skipped ?? 0,
+                };
+                setDownloadHistory((prev) => {
+                    const next = [entry, ...prev].slice(0, 10);
+                    localStorage.setItem("playlistr_dl_history", JSON.stringify(next));
+                    return next;
+                });
                 setTimeout(() => {
                     setPhase("completed");
                     toast.success("Download complete", {
@@ -138,6 +196,7 @@ export default function App() {
             setStatuses(init);
 
             subscribeToProgress(apiTracks);
+            setTab("downloads");
         } catch (err) {
             toast.error("Failed to start download", {
                 description: err.response?.data?.error ?? err.message,
@@ -148,9 +207,10 @@ export default function App() {
 
     const handleCancel = async () => {
         try {
-            await axios.post(`${API}/cancel`);
+            await axios.post(`${apiBase}/cancel`);
         } catch (_) {}
         closeSSE();
+        sessionStorage.removeItem("playlistr_dl_state");
         toast.error("Download cancelled");
         setPhase("home");
     };
@@ -160,6 +220,8 @@ export default function App() {
         setTracks([]);
         setStatuses({});
         setActiveIndex(0);
+        sessionStorage.removeItem("playlistr_dl_state");
+        setTab("download");
     };
 
     const handleOpenFolder = () => {
@@ -199,6 +261,15 @@ export default function App() {
             });
         }, 1400);
     };
+
+    // Guardar fila no sessionStorage
+    useEffect(() => {
+        if (playerQueue) {
+            sessionStorage.setItem("playlistr_queue", JSON.stringify({ queue: playerQueue, index: playerIndex }));
+        } else {
+            sessionStorage.removeItem("playlistr_queue");
+        }
+    }, [playerQueue, playerIndex]);
 
     // Limpar SSE ao desmontar
     useEffect(() => () => closeSSE(), []);
@@ -248,7 +319,7 @@ export default function App() {
                         data-testid="header-github-link"
                     >
                         <Github className="w-4 h-4" />
-                        <span className="px-1.5 py-0.5 rounded-md bg-white/8 text-neutral-300 font-mono">v2.2.0</span>
+                        <span className="px-1.5 py-0.5 rounded-md bg-white/8 text-neutral-300 font-mono">v2.3.0</span>
                     </a>
                 </header>
 
@@ -263,10 +334,11 @@ export default function App() {
                 {/* Tabs */}
                 <div className="flex gap-1 mb-4 bg-white/[0.03] rounded-2xl p-1 border border-white/10">
                     {[
-                        { key: "download", icon: <Download className="w-4 h-4" />, label: "Download" },
-                        { key: "library",  icon: <Library className="w-4 h-4" />,  label: "Biblioteca" },
-                        { key: "stats",    icon: <BarChart2 className="w-4 h-4" />, label: "Stats" },
-                        { key: "settings", icon: <Settings className="w-4 h-4" />, label: "Definições" },
+                        { key: "download",  icon: <Download className="w-4 h-4" />,  label: "Download" },
+                        { key: "downloads", icon: <History className="w-4 h-4" />,    label: "Downloads", badge: phase !== "home" },
+                        { key: "library",   icon: <Library className="w-4 h-4" />,   label: "Biblioteca" },
+                        { key: "stats",     icon: <BarChart2 className="w-4 h-4" />, label: "Stats" },
+                        { key: "settings",  icon: <Settings className="w-4 h-4" />,  label: "Definições" },
                     ].map((t) => (
                         <button
                             key={t.key}
@@ -277,7 +349,10 @@ export default function App() {
                                     : "text-neutral-500 hover:text-neutral-300"
                             }`}
                         >
-                            {t.icon}
+                            <div className="relative inline-flex">
+                                {t.icon}
+                                {t.badge && <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[#1DB954]" />}
+                            </div>
                             <span className="hidden sm:inline">{t.label}</span>
                         </button>
                     ))}
@@ -288,6 +363,28 @@ export default function App() {
                     className="rounded-3xl bg-white/[0.025] backdrop-blur-2xl border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.6)] p-6 md:p-10"
                     data-testid="app-main-panel"
                 >
+                    {tab === "download" && <HomeView onStart={handleStart} />}
+
+                    {tab === "downloads" && (
+                        <DownloadsView
+                            phase={phase}
+                            tracks={tracks}
+                            statuses={statuses}
+                            activeIndex={activeIndex}
+                            progressPct={progressPct}
+                            config={config}
+                            history={downloadHistory}
+                            onCancel={handleCancel}
+                            onRestart={handleRestart}
+                            onOpenFolder={handleOpenFolder}
+                            onRetryFailed={handleRetryFailed}
+                            onClearHistory={() => {
+                                setDownloadHistory([]);
+                                localStorage.removeItem("playlistr_dl_history");
+                            }}
+                        />
+                    )}
+
                     {tab === "library" && (
                         <LibraryView onPlay={handlePlay} onAddToQueue={handleAddToQueue} currentPath={currentPath} />
                     )}
@@ -297,47 +394,8 @@ export default function App() {
                     {tab === "settings" && (
                         <SettingsView settings={settings} onUpdate={updateSettings} />
                     )}
-
-                    {tab === "download" && phase === "home" && <HomeView onStart={handleStart} />}
-
-                    {tab === "download" && phase === "downloading" && tracks.length === 0 && (
-                        <div className="flex items-center justify-center py-20">
-                            <div className="text-center space-y-3">
-                                <div className="w-10 h-10 rounded-full border-2 border-[#1DB954] border-t-transparent animate-spin mx-auto" />
-                                <p className="text-sm text-neutral-400">Fetching playlist…</p>
-                            </div>
-                        </div>
-                    )}
-
-                    {tab === "download" && phase === "downloading" && tracks.length > 0 && (
-                        <ProgressView
-                            tracks={tracks}
-                            statuses={statuses}
-                            activeIndex={activeIndex}
-                            progressPct={progressPct}
-                            onCancel={handleCancel}
-                        />
-                    )}
-
-                    {tab === "download" && phase === "completed" && (
-                        <CompletedView
-                            tracks={tracks}
-                            statuses={statuses}
-                            onOpenFolder={handleOpenFolder}
-                            onRestart={handleRestart}
-                            onRetryFailed={handleRetryFailed}
-                        />
-                    )}
                 </main>
 
-                {tab === "download" && phase !== "home" && tracks.length > 0 && (
-                    <p
-                        className="text-center text-[11px] text-neutral-600 mt-4 font-mono"
-                        data-testid="playlist-meta-footer"
-                    >
-                        {config?.url?.split("/playlist/")?.[1]?.split("?")?.[0] ?? "playlist"} · {total} tracks
-                    </p>
-                )}
             </div>
 
             {/* Player global */}

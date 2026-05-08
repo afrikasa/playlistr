@@ -236,7 +236,11 @@ def start_download(req: DownloadRequest):
     }
 
     try:
-        raw_tracks = sd.fetch_playlist_tracks(req.playlist_url)
+        is_spotify = "spotify.com" in req.playlist_url or req.playlist_url.startswith("spotify:")
+        if is_spotify:
+            raw_tracks = sd.fetch_playlist_tracks(req.playlist_url)
+        else:
+            raw_tracks = _fetch_ytdlp_tracks(req.playlist_url)
     except Exception as exc:
         _state["status"] = "error"
         return {"error": str(exc)}
@@ -516,6 +520,75 @@ def get_library_stats():
 def scan_library():
     threading.Thread(target=lambda: _db.scan_and_index(_DOWNLOADS_DIR), daemon=True).start()
     return {"ok": True}
+
+
+@app.get("/lyrics")
+async def get_lyrics(title: str, artist: str):
+    """Busca letras via LrcLib (gratuito, sem key)."""
+    import urllib.request, urllib.parse
+    params = urllib.parse.urlencode({"track_name": title, "artist_name": artist})
+    url = f"https://lrclib.net/api/search?{params}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Playlistr/2.3"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+        if data:
+            best = data[0]
+            return {
+                "found": True,
+                "synced": best.get("syncedLyrics"),
+                "plain": best.get("plainLyrics"),
+            }
+    except Exception:
+        pass
+    return {"found": False, "synced": None, "plain": None}
+
+
+@app.get("/smart-playlists")
+def get_smart_playlists():
+    return {"playlists": _db.get_smart_playlists()}
+
+
+def _fetch_ytdlp_tracks(url: str) -> list[dict]:
+    """Extrai faixas de qualquer URL suportado pelo yt-dlp (YouTube, SoundCloud, etc.)."""
+    import subprocess as _sp
+    cmd = [sd.YT_DLP_EXE, "--flat-playlist", "--dump-single-json", "--no-warnings", url]
+    try:
+        result = _sp.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            raise ValueError(result.stderr[:300] or "yt-dlp falhou")
+        data = json.loads(result.stdout)
+    except Exception as exc:
+        raise ValueError(f"Não foi possível obter informação do URL: {exc}")
+
+    def best_thumb(thumbs):
+        if not thumbs: return None
+        best = sorted(thumbs, key=lambda t: (t.get("width") or 0) * (t.get("height") or 0), reverse=True)
+        return best[0].get("url") if best else None
+
+    if data.get("_type") == "playlist":
+        tracks = []
+        for e in (data.get("entries") or []):
+            if not e or not e.get("id"): continue
+            vid_url = e.get("url") or f"https://www.youtube.com/watch?v={e['id']}"
+            tracks.append({
+                "title": e.get("title") or "Unknown",
+                "artist": e.get("channel") or e.get("uploader") or "Unknown",
+                "album": data.get("title") or "YouTube",
+                "cover_url": best_thumb(e.get("thumbnails")) or e.get("thumbnail"),
+                "duration_ms": int(e.get("duration") or 0) * 1000,
+                "_yt_url": vid_url,
+            })
+        return tracks
+    else:
+        return [{
+            "title": data.get("title") or "Unknown",
+            "artist": data.get("channel") or data.get("uploader") or "Unknown",
+            "album": data.get("playlist_title") or "YouTube",
+            "cover_url": best_thumb(data.get("thumbnails")) or data.get("thumbnail"),
+            "duration_ms": int(data.get("duration") or 0) * 1000,
+            "_yt_url": url,
+        }]
 
 
 @app.get("/files/{path:path}")

@@ -145,7 +145,7 @@ export const HomeView = ({ onStart }) => {
                     <span className="text-[#1DB954]">Keep it forever.</span>
                 </h1>
                 <p className="text-neutral-400 text-sm md:text-base max-w-lg">
-                    Escolhe uma das tuas playlists ou cola qualquer URL público do Spotify.
+                    Spotify, YouTube, SoundCloud — cola qualquer URL e descarrega como MP3.
                 </p>
             </div>
 
@@ -203,7 +203,7 @@ export const HomeView = ({ onStart }) => {
                     htmlFor="playlist-url"
                 >
                     <Link2 className="w-3.5 h-3.5" />
-                    {playlists.length > 0 ? "Ou cola um URL público externo" : "Playlist URL"}
+                    {playlists.length > 0 ? "Ou cola um URL (Spotify · YouTube · SoundCloud)" : "URL (Spotify · YouTube · SoundCloud)"}
                 </label>
                 <div className="flex gap-2">
                     <div className="flex-1 relative">
@@ -212,7 +212,7 @@ export const HomeView = ({ onStart }) => {
                             type="text"
                             value={url}
                             onChange={(e) => { setUrl(e.target.value); setSelectedId(""); }}
-                            placeholder="https://open.spotify.com/playlist/..."
+                            placeholder="https://open.spotify.com/playlist/… ou youtube.com/…"
                             data-testid="playlist-input"
                             className="w-full bg-[#121212] border border-white/10 rounded-xl px-4 py-3.5 text-white placeholder:text-neutral-600 focus:outline-none focus:ring-2 focus:ring-[#1DB954]/40 focus:border-[#1DB954]/60 transition-all font-mono text-sm"
                         />
