@@ -330,7 +330,7 @@ export default function App() {
                         data-testid="header-github-link"
                     >
                         <Github className="w-4 h-4" />
-                        <span className="px-1.5 py-0.5 rounded-md bg-white/8 text-neutral-300 font-mono">v2.3.0</span>
+                        <span className="px-1.5 py-0.5 rounded-md bg-white/8 text-neutral-300 font-mono">v2.3.1</span>
                     </a>
                 </header>
 
