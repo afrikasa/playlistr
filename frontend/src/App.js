@@ -94,7 +94,10 @@ export default function App() {
         const check = () => {
             axios.get("/auth-status", { timeout: 3000 })
                 .then(() => setServerOnline(true))
-                .catch(() => setServerOnline(false));
+                .catch((err) => {
+                    // Qualquer resposta HTTP = servidor online; só falha de rede = offline
+                    setServerOnline(!!err.response);
+                });
         };
         check();
         const id = setInterval(check, 30000);

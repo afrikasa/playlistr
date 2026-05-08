@@ -756,7 +756,7 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
                         <input type="range" min="0" max="1" step="0.02" value={muted ? 0 : volume}
                             onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); if (v > 0) setMuted(false); }}
                             className="hidden sm:block w-16 accent-[#1DB954] cursor-pointer" />
-                        <button onClick={() => setMini(true)} title="Mini-player" className="text-neutral-600 hover:text-neutral-300 transition-colors">
+                        <button onClick={() => setMini(true)} title="Mini-player" className="text-neutral-400 hover:text-white transition-colors">
                             <ChevronDown className="w-4 h-4" />
                         </button>
                         {onClose && (
