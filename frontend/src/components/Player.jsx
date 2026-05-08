@@ -58,7 +58,11 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     const [showEQ, setShowEQ] = useState(false);
     const [mini, setMini] = useState(false);
     const [pip, setPip] = useState(false);
-    const pipContainerRef = useRef(null);
+    const pipWinRef = useRef(null);
+    const pipElRef = useRef(null);
+    const pipGoPrevRef = useRef(null);
+    const pipGoNextRef = useRef(null);
+    const pipTogglePlayRef = useRef(null);
     const [related, setRelated] = useState(null); // null | []
     const [showRelated, setShowRelated] = useState(false);
     const [lyrics, setLyrics] = useState(null); // null=loading, {found,lines,plain}
@@ -85,6 +89,7 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     const repeatRef = useRef(repeat);
     const normalizeNodeRef = useRef(null);
     const scrobbledRef = useRef(false); // evitar scrobble duplo por faixa
+    const preloadRef = useRef(null); // elemento Audio oculto para pré-carregar a faixa seguinte
 
     // Normalização de volume (compressor bypass via gain)
     useEffect(() => {
@@ -156,6 +161,12 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     const index = order[pos];
     const track = queue[index];
 
+    // Valores derivados do state — declarados aqui (antes de qualquer effect)
+    // para evitar TDZ quando usados em dependency arrays de useEffect abaixo.
+    const pct = duration ? (currentTime / duration) * 100 : 0;
+    const canPrev = pos > 0 || repeat === "all";
+    const canNext = pos < order.length - 1 || repeat === "all";
+
     // Carregar e tocar faixa (com suporte a fade-in de crossfade)
     useEffect(() => {
         const audio = audioRef.current;
@@ -205,6 +216,18 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
         if (!audio) return;
         audio.volume = muted ? 0 : volume;
     }, [volume, muted]);
+
+    // Pré-carregar a faixa seguinte para eliminar atraso de buffering no Next
+    useEffect(() => {
+        const nextPos = pos + 1;
+        if (nextPos >= order.length) return;
+        const nextTrack = queue[order[nextPos]];
+        if (!nextTrack) return;
+        const url = nextTrack.blobUrl || assetUrl(`/files/${nextTrack.path}`);
+        if (!preloadRef.current) preloadRef.current = new Audio();
+        preloadRef.current.preload = "auto";
+        preloadRef.current.src = url;
+    }, [pos, order, queue]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Rolar faixa actual para o centro quando a fila abre
     useEffect(() => {
@@ -348,37 +371,17 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
             .catch(() => setLyrics({ found: false }));
     }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Listener nativo para botões do PiP (click events não borbulham entre documentos)
-    useEffect(() => {
-        const el = pipContainerRef.current;
-        if (!el) return;
-        const handle = (e) => {
-            const action = e.target.closest("[data-pip]")?.dataset.pip;
-            if (action === "prev") goPrev();
-            else if (action === "play") togglePlay();
-            else if (action === "next") goNext();
-        };
-        el.addEventListener("click", handle);
-        return () => el.removeEventListener("click", handle);
-    }, [goPrev, togglePlay, goNext]); // eslint-disable-line react-hooks/exhaustive-deps
-
     const openPip = async () => {
-        if (!("documentPictureInPicture" in window)) {
-            setMini(true); // fallback em browsers sem suporte
-            return;
-        }
+        if (!("documentPictureInPicture" in window)) { setMini(true); return; }
         try {
             const pipWin = await window.documentPictureInPicture.requestWindow({
-                width: 300,
-                height: 92,
-                disallowReturnToOpener: false,
+                width: 300, height: 92, disallowReturnToOpener: false,
             });
-            // Copiar todos os estilos para o novo documento
+            // Copiar estilos para o documento PiP
             [...document.styleSheets].forEach((ss) => {
                 try {
-                    const text = [...ss.cssRules].map(r => r.cssText).join("");
                     const style = pipWin.document.createElement("style");
-                    style.textContent = text;
+                    style.textContent = [...ss.cssRules].map(r => r.cssText).join("");
                     pipWin.document.head.appendChild(style);
                 } catch (_) {
                     if (ss.href) {
@@ -388,19 +391,26 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
                     }
                 }
             });
-            pipWin.document.body.style.cssText = "margin:0;padding:0;background:#111;overflow:hidden";
-            const el = pipContainerRef.current;
-            el.style.display = "flex";
+            pipWin.document.body.style.cssText = "margin:0;padding:0;background:#111;overflow:hidden;font-family:system-ui,sans-serif";
+            const el = pipWin.document.createElement("div");
+            el.style.cssText = "display:flex;align-items:center;gap:12px;padding:12px 16px;box-sizing:border-box;height:92px";
             pipWin.document.body.appendChild(el);
+            pipElRef.current = el;
+            pipWinRef.current = pipWin;
+            // Clicks usam refs para evitar closures stale (events não borbulham entre documentos)
+            el.addEventListener("click", (e) => {
+                const a = e.target.closest("[data-pip]")?.dataset.pip;
+                if (a === "prev" && pipGoPrevRef.current) pipGoPrevRef.current();
+                else if (a === "play" && pipTogglePlayRef.current) pipTogglePlayRef.current();
+                else if (a === "next" && pipGoNextRef.current) pipGoNextRef.current();
+            });
             setPip(true);
             pipWin.addEventListener("pagehide", () => {
-                el.style.display = "none";
-                document.body.appendChild(el); // devolver ao documento principal
+                pipElRef.current = null;
+                pipWinRef.current = null;
                 setPip(false);
             });
-        } catch (_) {
-            setMini(true);
-        }
+        } catch (_) { setMini(true); }
     };
 
     const handleEnded = useCallback(() => {
@@ -417,6 +427,9 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     }, [repeat, order.length]);
 
     const goNext = useCallback(() => {
+        // Transição manual — cancelar crossfade para a nova faixa começar imediatamente
+        xfadeActive.current = false;
+        clearInterval(xfadeIntervalRef.current);
         setPos(p => {
             if (p < order.length - 1) return p + 1;
             if (repeat === "all") return 0;
@@ -425,6 +438,8 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     }, [repeat, order.length]);
 
     const goPrev = useCallback(() => {
+        xfadeActive.current = false;
+        clearInterval(xfadeIntervalRef.current);
         setPos(p => {
             if (p > 0) return p - 1;
             if (repeat === "all") return order.length - 1;
@@ -446,6 +461,59 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
             audio.play().then(() => setIsPlaying(true)).catch(() => {});
         }
     }, [isPlaying]);
+
+    // Manter refs dos callbacks PiP actualizadas (evita closures stale na janela flutuante)
+    useEffect(() => { pipGoPrevRef.current = goPrev; }, [goPrev]);
+    useEffect(() => { pipGoNextRef.current = goNext; }, [goNext]);
+    useEffect(() => { pipTogglePlayRef.current = togglePlay; }, [togglePlay]);
+
+    // Re-render estrutural do PiP quando a faixa, cor ou capacidade muda
+    useEffect(() => {
+        const el = pipElRef.current;
+        if (!el || !el.isConnected) return;
+        const t = track;
+        const color = accentColor || "#1DB954";
+        const coverSrc = t?.has_cover ? assetUrl(`/cover/${t.path}`) : "";
+        const esc = (s) => String(s || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        el.innerHTML = `
+            <div style="width:44px;height:44px;border-radius:10px;overflow:hidden;flex-shrink:0;background:${color}33;display:flex;align-items:center;justify-content:center">
+                ${coverSrc ? `<img src="${coverSrc}" style="width:100%;height:100%;object-fit:cover" />` : '<span style="font-size:18px;color:#555">♪</span>'}
+            </div>
+            <div style="flex:1;min-width:0">
+                <p style="margin:0;font-size:13px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t?.title)}</p>
+                <p style="margin:2px 0 0;font-size:11px;color:#999;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t?.artist)}</p>
+                <div style="margin-top:6px;height:2px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden">
+                    <div id="pip-prog" style="height:100%;background:${color};width:${pct}%;transition:width 0.3s linear"></div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+                <button data-pip="prev" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:none;border:none;color:${canPrev ? "#ccc" : "#444"};cursor:${canPrev ? "pointer" : "default"};font-size:14px">⏮</button>
+                <button id="pip-play" data-pip="play" style="width:36px;height:36px;border-radius:50%;background:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">${isPlaying ? "⏸" : "▶"}</button>
+                <button data-pip="next" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:none;border:none;color:${canNext ? "#ccc" : "#444"};cursor:${canNext ? "pointer" : "default"};font-size:14px">⏭</button>
+            </div>
+        `;
+    }, [pip, track, accentColor, canPrev, canNext]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Actualizar progresso e play/pause no PiP (executa frequentemente com o timeupdate)
+    useEffect(() => {
+        const win = pipWinRef.current;
+        if (!win || !pip) return;
+        const prog = win.document.getElementById("pip-prog");
+        if (prog) prog.style.width = `${pct}%`;
+        const playBtn = win.document.getElementById("pip-play");
+        if (playBtn) playBtn.textContent = isPlaying ? "⏸" : "▶";
+    }, [pct, isPlaying, pip]);
+
+    // Fechar janela PiP ao desmontar o Player
+    useEffect(() => {
+        return () => {
+            if (pipWinRef.current) {
+                try { pipWinRef.current.close(); } catch (_) {}
+                pipWinRef.current = null;
+                pipElRef.current = null;
+            }
+        };
+    }, []);
 
     // Atalhos de teclado
     useEffect(() => {
@@ -558,50 +626,10 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     };
     const handleDragEnd = () => { dragIdxRef.current = null; setDragOver(null); };
 
-    const pct = duration ? (currentTime / duration) * 100 : 0;
     const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-    const canPrev = pos > 0 || repeat === "all";
-    const canNext = pos < order.length - 1 || repeat === "all";
 
     return (
         <>
-            {/* Container PiP — sempre no DOM; movido para janela flutuante via openPip() */}
-            <div
-                ref={pipContainerRef}
-                style={{ display: "none" }}
-                className="w-full items-center gap-3 px-4 py-3"
-            >
-                <div
-                    className="w-11 h-11 rounded-xl overflow-hidden flex-shrink-0"
-                    style={{ background: accentColor ? `${accentColor}33` : "#222" }}
-                >
-                    {track?.has_cover
-                        ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" />
-                        : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-5 h-5 text-neutral-500" /></div>}
-                </div>
-                <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-white truncate leading-tight">{track?.title}</p>
-                    <p className="text-xs text-neutral-400 truncate">{track?.artist}</p>
-                    {/* Barra de progresso */}
-                    <div className="mt-1.5 h-0.5 bg-white/10 rounded-full overflow-hidden">
-                        <div className="h-full rounded-full transition-[width] duration-200" style={{ width: `${pct}%`, backgroundColor: accentColor || "#1DB954" }} />
-                    </div>
-                </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                    <button data-pip="prev" disabled={!canPrev} className="w-8 h-8 flex items-center justify-center text-neutral-400 disabled:opacity-25 hover:text-white transition-colors">
-                        <SkipBack className="w-4 h-4 pointer-events-none" />
-                    </button>
-                    <button data-pip="play" className="w-9 h-9 rounded-full bg-white flex items-center justify-center hover:scale-105 transition-transform flex-shrink-0">
-                        {isPlaying
-                            ? <Pause className="w-4 h-4 text-black fill-black pointer-events-none" />
-                            : <Play className="w-4 h-4 text-black fill-black ml-0.5 pointer-events-none" />}
-                    </button>
-                    <button data-pip="next" disabled={!canNext} className="w-8 h-8 flex items-center justify-center text-neutral-400 disabled:opacity-25 hover:text-white transition-colors">
-                        <SkipForward className="w-4 h-4 pointer-events-none" />
-                    </button>
-                </div>
-            </div>
-
             {/* Now Playing — ecrã cheio */}
             {showNowPlaying && (
                 <NowPlaying

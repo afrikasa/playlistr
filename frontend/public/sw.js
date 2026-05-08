@@ -62,7 +62,8 @@ self.addEventListener('fetch', (event) => {
       return fetch(request)
         .then((response) => {
           if (response.ok) {
-            caches.open(CACHE).then(c => c.put(request, response.clone()));
+            const clone = response.clone(); // clonar imediatamente antes de qualquer async
+            caches.open(CACHE).then(c => c.put(request, clone));
           }
           return response;
         })

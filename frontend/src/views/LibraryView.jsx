@@ -98,15 +98,15 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
 
     const filtered = tracks.filter((t) => {
         const q = search.toLowerCase();
-        const matchSearch = t.title.toLowerCase().includes(q) || t.artist.toLowerCase().includes(q) || t.album.toLowerCase().includes(q);
+        const matchSearch = (t.title || "").toLowerCase().includes(q) || (t.artist || "").toLowerCase().includes(q) || (t.album || "").toLowerCase().includes(q);
         return matchSearch && (!likedOnly || likedSet.has(t.path));
     });
 
     const sorted = [...filtered].sort((a, b) => {
-        if (sortBy === "title") return a.title.localeCompare(b.title);
+        if (sortBy === "title") return (a.title || "").localeCompare(b.title || "");
         if (sortBy === "plays") return (b.play_count || 0) - (a.play_count || 0);
         if (sortBy === "recent") return (b.added_at || "").localeCompare(a.added_at || "");
-        return (a.artist || "").localeCompare(b.artist || "") || (a.album || "").localeCompare(b.album || "") || a.title.localeCompare(b.title);
+        return (a.artist || "").localeCompare(b.artist || "") || (a.album || "").localeCompare(b.album || "") || (a.title || "").localeCompare(b.title || "");
     });
 
     if (loading) {
@@ -342,7 +342,7 @@ function filterGroups(groups, search) {
     return Object.fromEntries(
         Object.entries(groups).filter(([key, tracks]) =>
             key.toLowerCase().includes(q) ||
-            tracks.some((t) => t.title.toLowerCase().includes(q) || t.artist.toLowerCase().includes(q) || t.album.toLowerCase().includes(q))
+            tracks.some((t) => (t.title || "").toLowerCase().includes(q) || (t.artist || "").toLowerCase().includes(q) || (t.album || "").toLowerCase().includes(q))
         )
     );
 }

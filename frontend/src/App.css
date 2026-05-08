@@ -5,43 +5,45 @@
 
 /* ── Dynamic accent colour ──────────────────────────────────────────
    As classes Tailwind usam #1DB954 hardcoded. Estes overrides
-   interceptam essas classes e aplicam o CSS variable --accent
-   (e --accent-rgb para variantes com opacidade).
-   Basta mudar --accent no :root e tudo actualiza automaticamente.
+   interceptam essas classes e aplicam o CSS variable --app-accent
+   (e --app-accent-rgb para variantes com opacidade).
+   Basta mudar --app-accent no :root e tudo actualiza automaticamente.
+   Nota: usamos --app-accent (não --accent) para não colidir com
+   as variáveis HSL do Radix UI/shadcn definidas em index.css.
 ─────────────────────────────────────────────────────────────────── */
 
 /* Sólido */
-.bg-\[\#1DB954\]     { background-color: var(--accent) !important; }
-.text-\[\#1DB954\]   { color: var(--accent) !important; }
-.border-\[\#1DB954\] { border-color: var(--accent) !important; }
-.accent-\[\#1DB954\] { accent-color: var(--accent) !important; }
-.fill-\[\#1DB954\]   { fill: var(--accent) !important; }
+.bg-\[\#1DB954\]     { background-color: var(--app-accent) !important; }
+.text-\[\#1DB954\]   { color: var(--app-accent) !important; }
+.border-\[\#1DB954\] { border-color: var(--app-accent) !important; }
+.accent-\[\#1DB954\] { accent-color: var(--app-accent) !important; }
+.fill-\[\#1DB954\]   { fill: var(--app-accent) !important; }
 
 /* Opacidade — bg */
-.bg-\[\#1DB954\]\/8  { background-color: rgba(var(--accent-rgb), 0.08) !important; }
-.bg-\[\#1DB954\]\/10 { background-color: rgba(var(--accent-rgb), 0.10) !important; }
-.bg-\[\#1DB954\]\/20 { background-color: rgba(var(--accent-rgb), 0.20) !important; }
+.bg-\[\#1DB954\]\/8  { background-color: rgba(var(--app-accent-rgb), 0.08) !important; }
+.bg-\[\#1DB954\]\/10 { background-color: rgba(var(--app-accent-rgb), 0.10) !important; }
+.bg-\[\#1DB954\]\/20 { background-color: rgba(var(--app-accent-rgb), 0.20) !important; }
 
 /* Opacidade — border */
-.border-\[\#1DB954\]\/15 { border-color: rgba(var(--accent-rgb), 0.15) !important; }
-.border-\[\#1DB954\]\/20 { border-color: rgba(var(--accent-rgb), 0.20) !important; }
-.border-\[\#1DB954\]\/30 { border-color: rgba(var(--accent-rgb), 0.30) !important; }
-.border-\[\#1DB954\]\/40 { border-color: rgba(var(--accent-rgb), 0.40) !important; }
-.border-\[\#1DB954\]\/60 { border-color: rgba(var(--accent-rgb), 0.60) !important; }
+.border-\[\#1DB954\]\/15 { border-color: rgba(var(--app-accent-rgb), 0.15) !important; }
+.border-\[\#1DB954\]\/20 { border-color: rgba(var(--app-accent-rgb), 0.20) !important; }
+.border-\[\#1DB954\]\/30 { border-color: rgba(var(--app-accent-rgb), 0.30) !important; }
+.border-\[\#1DB954\]\/40 { border-color: rgba(var(--app-accent-rgb), 0.40) !important; }
+.border-\[\#1DB954\]\/60 { border-color: rgba(var(--app-accent-rgb), 0.60) !important; }
 
 /* Opacidade — text */
-.text-\[\#1DB954\]\/50 { color: rgba(var(--accent-rgb), 0.50) !important; }
+.text-\[\#1DB954\]\/50 { color: rgba(var(--app-accent-rgb), 0.50) !important; }
 
 /* Focus */
-.focus\:border-\[\#1DB954\]\/50:focus { border-color: rgba(var(--accent-rgb), 0.50) !important; }
-.focus\:ring-\[\#1DB954\]\/40:focus   { --tw-ring-color: rgba(var(--accent-rgb), 0.40) !important; }
-.focus\:ring-\[\#1DB954\]\/30:focus   { --tw-ring-color: rgba(var(--accent-rgb), 0.30) !important; }
-.focus\:ring-\[\#1DB954\]\/20:focus   { --tw-ring-color: rgba(var(--accent-rgb), 0.20) !important; }
+.focus\:border-\[\#1DB954\]\/50:focus { border-color: rgba(var(--app-accent-rgb), 0.50) !important; }
+.focus\:ring-\[\#1DB954\]\/40:focus   { --tw-ring-color: rgba(var(--app-accent-rgb), 0.40) !important; }
+.focus\:ring-\[\#1DB954\]\/30:focus   { --tw-ring-color: rgba(var(--app-accent-rgb), 0.30) !important; }
+.focus\:ring-\[\#1DB954\]\/20:focus   { --tw-ring-color: rgba(var(--app-accent-rgb), 0.20) !important; }
 
 /* Hover */
-.hover\:bg-\[\#1DB954\]\/20:hover { background-color: rgba(var(--accent-rgb), 0.20) !important; }
+.hover\:bg-\[\#1DB954\]\/20:hover { background-color: rgba(var(--app-accent-rgb), 0.20) !important; }
 
 /* Shadow do logo */
 .shadow-\[0_4px_20px_rgba\(29\,185\,84\,0\.4\)\] {
-    box-shadow: 0 4px 20px rgba(var(--accent-rgb), 0.4) !important;
+    box-shadow: 0 4px 20px rgba(var(--app-accent-rgb), 0.4) !important;
 }
