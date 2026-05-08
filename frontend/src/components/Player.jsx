@@ -36,7 +36,7 @@ function makeShuffled(length, currentIdx) {
     return [currentIdx, ...rest];
 }
 
-export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackChange }) {
+export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeVolume = false, lastfm = null, onTrackChange }) {
     const audioRef = useRef(null);
     const [order, setOrder] = useState(() => queue.map((_, i) => i));
     const [pos, setPos] = useState(initialIndex);
@@ -56,6 +56,9 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
     const [dragOver, setDragOver] = useState(null);
     const [eqGains, setEqGains] = useState([0, 0, 0]); // bass, mid, treble (dB)
     const [showEQ, setShowEQ] = useState(false);
+    const [mini, setMini] = useState(false);
+    const [related, setRelated] = useState(null); // null | []
+    const [showRelated, setShowRelated] = useState(false);
     const [lyrics, setLyrics] = useState(null); // null=loading, {found,lines,plain}
     const [showLyrics, setShowLyrics] = useState(false);
     const [currentLyricIdx, setCurrentLyricIdx] = useState(-1);
@@ -78,6 +81,15 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
     const trebleNodeRef = useRef(null);
     const orderRef = useRef(order);
     const repeatRef = useRef(repeat);
+    const normalizeNodeRef = useRef(null);
+    const scrobbledRef = useRef(false); // evitar scrobble duplo por faixa
+
+    // Normalização de volume (compressor bypass via gain)
+    useEffect(() => {
+        if (!normalizeNodeRef.current) return;
+        normalizeNodeRef.current.ratio.value = normalizeVolume ? 12 : 1;
+        normalizeNodeRef.current.threshold.value = normalizeVolume ? -24 : 0;
+    }, [normalizeVolume]);
 
     // Sincronizar refs com state e props
     useEffect(() => { volumeRef.current = volume; }, [volume]);
@@ -119,8 +131,17 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
             source.connect(bass);
             bass.connect(mid);
             mid.connect(treble);
+            const compressor = ctx.createDynamicsCompressor();
+            compressor.threshold.value = -24;
+            compressor.knee.value = 30;
+            compressor.ratio.value = 12;
+            compressor.attack.value = 0.003;
+            compressor.release.value = 0.25;
+
             treble.connect(analyser);
-            analyser.connect(ctx.destination);
+            analyser.connect(compressor);
+            compressor.connect(ctx.destination);
+            normalizeNodeRef.current = compressor;
 
             audioCtxRef.current = ctx;
             analyserRef.current = analyser;
@@ -290,6 +311,26 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
         axios.post("/library/play", { path: track.path }).catch(() => {});
     }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Last.fm: Now Playing ao mudar de faixa
+    useEffect(() => {
+        scrobbledRef.current = false;
+        if (!lastfm || !track?.title) return;
+        axios.post("/lastfm/now-playing", {
+            api_key: lastfm.apiKey, api_secret: lastfm.apiSecret,
+            session_key: lastfm.sessionKey, title: track.title,
+            artist: track.artist || "", timestamp: Math.floor(Date.now() / 1000),
+        }).catch(() => {});
+    }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Músicas relacionadas via Last.fm (se API key disponível)
+    useEffect(() => {
+        if (!track?.title || !lastfm?.apiKey) { setRelated(null); return; }
+        setRelated(null);
+        axios.get("/lastfm/similar", { params: { artist: track.artist || "", title: track.title, api_key: lastfm.apiKey } })
+            .then((r) => setRelated(r.data.tracks || []))
+            .catch(() => setRelated([]));
+    }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Buscar letras ao mudar de faixa
     useEffect(() => {
         if (!track?.title) { setLyrics(null); setCurrentLyricIdx(-1); return; }
@@ -395,6 +436,20 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
         const t = e.target.currentTime;
         setCurrentTime(t);
 
+        // Last.fm scrobble: após 30s e > 50% da faixa
+        if (lastfm && !scrobbledRef.current && durationRef.current > 0) {
+            const pct = t / durationRef.current;
+            if (t > 30 && pct > 0.5) {
+                scrobbledRef.current = true;
+                const tr = track;
+                axios.post("/lastfm/scrobble", {
+                    api_key: lastfm.apiKey, api_secret: lastfm.apiSecret,
+                    session_key: lastfm.sessionKey, title: tr?.title || "",
+                    artist: tr?.artist || "", timestamp: Math.floor((Date.now() - t * 1000) / 1000),
+                }).catch(() => {});
+            }
+        }
+
         // Sincronizar linha de letras
         const lines = lyrics?.lines;
         if (lines?.length) {
@@ -476,6 +531,9 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
                     currentLyricIdx={currentLyricIdx}
                     showLyrics={showLyrics}
                     onToggleLyrics={() => setShowLyrics(l => !l)}
+                    related={related}
+                    showRelated={showRelated}
+                    onToggleRelated={() => setShowRelated(r => !r)}
                     onClose={() => setShowNowPlaying(false)}
                     onTogglePlay={togglePlay}
                     onPrev={goPrev}
@@ -592,9 +650,28 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
                 </div>
             )}
 
+            {/* Mini-player */}
+            {mini && (
+                <div
+                    className="fixed bottom-4 right-4 z-50 flex items-center gap-3 px-4 py-2.5 rounded-full backdrop-blur-xl border border-white/15 shadow-2xl cursor-pointer"
+                    style={{ backgroundColor: accentColor ? `color-mix(in srgb, ${accentColor} 25%, #111 75%)` : "#1a1a1a" }}
+                    onClick={() => setMini(false)}
+                >
+                    <div className="w-7 h-7 rounded-full overflow-hidden bg-white/10 flex-shrink-0">
+                        {track?.has_cover
+                            ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" />
+                            : <Music2 className="w-4 h-4 text-neutral-500 m-auto mt-1.5" />}
+                    </div>
+                    <p className="text-xs font-medium max-w-[140px] truncate">{track?.title}</p>
+                    <button onClick={(e) => { e.stopPropagation(); togglePlay(); }} className="w-7 h-7 rounded-full bg-white flex items-center justify-center flex-shrink-0">
+                        {isPlaying ? <Pause className="w-3 h-3 text-black fill-black" /> : <Play className="w-3 h-3 text-black fill-black ml-0.5" />}
+                    </button>
+                </div>
+            )}
+
             {/* Barra do player */}
             <div
-                className="fixed bottom-0 left-0 right-0 backdrop-blur-xl border-t border-white/10 px-4 py-2.5 z-50 transition-colors duration-700"
+                className={`fixed bottom-0 left-0 right-0 backdrop-blur-xl border-t border-white/10 px-4 py-2.5 z-50 transition-all duration-300 ${mini ? "translate-y-full pointer-events-none" : ""}`}
                 style={{ backgroundColor: accentColor ? `color-mix(in srgb, ${accentColor} 18%, #111 82%)` : "#111" }}
             >
                 <audio
@@ -679,6 +756,9 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, onTrackCha
                         <input type="range" min="0" max="1" step="0.02" value={muted ? 0 : volume}
                             onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); if (v > 0) setMuted(false); }}
                             className="hidden sm:block w-16 accent-[#1DB954] cursor-pointer" />
+                        <button onClick={() => setMini(true)} title="Mini-player" className="text-neutral-600 hover:text-neutral-300 transition-colors">
+                            <ChevronDown className="w-4 h-4" />
+                        </button>
                         {onClose && (
                             <button onClick={onClose} className="ml-1 text-neutral-600 hover:text-neutral-300 transition-colors">
                                 <X className="w-4 h-4" />
@@ -733,7 +813,7 @@ function Visualizer({ analyserRef }) {
 
 // ── Now Playing overlay ───────────────────────────────────────────
 
-function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, duration, pct, shuffle, repeat, canPrev, canNext, volume, muted, crossfade, xfadeSecs, analyserRef, lyrics, currentLyricIdx, showLyrics, onToggleLyrics, onClose, onTogglePlay, onPrev, onNext, onSeek, onToggleShuffle, onCycleRepeat, onToggleLike, onToggleCrossfade, onVolume, onToggleMute, fmt }) {
+function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, duration, pct, shuffle, repeat, canPrev, canNext, volume, muted, crossfade, xfadeSecs, analyserRef, lyrics, currentLyricIdx, showLyrics, onToggleLyrics, related, showRelated, onToggleRelated, onClose, onTogglePlay, onPrev, onNext, onSeek, onToggleShuffle, onCycleRepeat, onToggleLike, onToggleCrossfade, onVolume, onToggleMute, fmt }) {
     const lyricRef = useRef(null);
     // Auto-scroll para a linha actual
     useEffect(() => {
@@ -861,6 +941,35 @@ function NowPlaying({ track, accentColor, isPlaying, isLiked, currentTime, durat
                     </div>
                     <span className="text-xs">{crossfade ? `${xfadeSecs}s · ligado` : "desligado"}</span>
                 </button>
+                )}
+
+                {/* Músicas relacionadas (Last.fm) */}
+                {related !== null && (
+                    <button
+                        onClick={onToggleRelated}
+                        className={`mt-3 w-full flex items-center justify-between px-4 py-2.5 rounded-xl border transition-all ${showRelated ? "border-white/20 bg-white/8 text-white" : "border-white/10 text-neutral-500 hover:text-white"}`}
+                    >
+                        <div className="flex items-center gap-2">
+                            <Music2 className="w-4 h-4" />
+                            <span className="text-sm font-medium">Relacionadas</span>
+                        </div>
+                        <span className="text-xs">{related.length > 0 ? `${related.length} sugestões` : "nenhuma"}</span>
+                    </button>
+                )}
+                {showRelated && related?.length > 0 && (
+                    <div className="mt-2 space-y-1 max-h-52 overflow-y-auto rounded-xl" style={{ scrollbarWidth: "thin" }}>
+                        {related.map((r, i) => (
+                            <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white/[0.03] border border-white/5">
+                                <div className="w-7 h-7 rounded-md bg-white/5 flex items-center justify-center flex-shrink-0 text-neutral-600">
+                                    <Music2 className="w-3 h-3" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-medium truncate">{r.title}</p>
+                                    <p className="text-[11px] text-neutral-500 truncate">{r.artist}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 )}
             </div>
         </div>

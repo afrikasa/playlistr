@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from "react";
 import { assetUrl } from "../utils/apiBase";
-import { BarChart2, Clock, Heart, Mic2, Music2, Play } from "lucide-react";
+import { BarChart2, Calendar, Clock, Heart, Mic2, Music2, Play, ChevronLeft, ChevronRight } from "lucide-react";
 import axios from "axios";
 
 export function StatsView() {
@@ -98,6 +98,8 @@ export function StatsView() {
                     </div>
                 </div>
             )}
+
+            <WrappedSection />
         </div>
     );
 }
@@ -108,6 +110,159 @@ function StatCard({ icon, label, value, color }) {
             <div className={color}>{icon}</div>
             <p className="text-xl font-bold leading-tight">{value}</p>
             <p className="text-xs text-neutral-500">{label}</p>
+        </div>
+    );
+}
+
+// ── Wrapped / Year in Review ──────────────────────────────────────
+
+function WrappedSection() {
+    const currentYear = new Date().getFullYear();
+    const [year, setYear] = useState(currentYear);
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [loaded, setLoaded] = useState(false);
+
+    const load = (y) => {
+        setLoading(true);
+        setData(null);
+        axios.get("/library/wrapped", { params: { year: y } })
+            .then((r) => { setData(r.data); setLoaded(true); })
+            .catch(() => setData(null))
+            .finally(() => setLoading(false));
+    };
+
+    const changeYear = (delta) => {
+        const next = year + delta;
+        setYear(next);
+        setLoaded(false);
+        setData(null);
+    };
+
+    return (
+        <div>
+            <p className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5" />
+                Year in Review
+            </p>
+
+            {/* Selector de ano */}
+            <div className="flex items-center justify-between mb-3 px-1">
+                <button onClick={() => changeYear(-1)} className="p-1.5 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white transition-colors">
+                    <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-lg font-bold">{year}</span>
+                <button onClick={() => changeYear(1)} disabled={year >= currentYear} className="p-1.5 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white disabled:opacity-25 transition-colors">
+                    <ChevronRight className="w-4 h-4" />
+                </button>
+            </div>
+
+            {!loaded && (
+                <button
+                    onClick={() => load(year)}
+                    disabled={loading}
+                    className="w-full py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-sm text-neutral-400 hover:text-white hover:border-white/20 transition-all disabled:opacity-50"
+                >
+                    {loading ? "A carregar…" : `Ver resumo de ${year}`}
+                </button>
+            )}
+
+            {loaded && !data && (
+                <p className="text-center text-sm text-neutral-500 py-4">Sem dados para {year}.</p>
+            )}
+
+            {data && data.total_plays > 0 && (
+                <div className="space-y-4">
+                    {/* Resumo */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-gradient-to-br from-[#1DB954]/20 to-transparent border border-[#1DB954]/20 rounded-2xl p-4">
+                            <p className="text-3xl font-bold text-[#1DB954]">{data.total_plays}</p>
+                            <p className="text-xs text-neutral-400 mt-1">reproduções em {year}</p>
+                        </div>
+                        {data.best_month && (
+                            <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-4">
+                                <p className="text-xl font-bold">{data.best_month}</p>
+                                <p className="text-xs text-neutral-400 mt-1">mês mais activo</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Primeira e última */}
+                    {(data.first_track || data.last_track) && (
+                        <div className="grid grid-cols-2 gap-3">
+                            {data.first_track && (
+                                <div className="bg-white/[0.02] border border-white/8 rounded-xl p-3">
+                                    <p className="text-[10px] text-neutral-500 uppercase tracking-wide mb-1">Primeira de {year}</p>
+                                    <p className="text-xs font-medium truncate">{data.first_track.title}</p>
+                                    <p className="text-[11px] text-neutral-500 truncate">{data.first_track.artist}</p>
+                                </div>
+                            )}
+                            {data.last_track && (
+                                <div className="bg-white/[0.02] border border-white/8 rounded-xl p-3">
+                                    <p className="text-[10px] text-neutral-500 uppercase tracking-wide mb-1">Última de {year}</p>
+                                    <p className="text-xs font-medium truncate">{data.last_track.title}</p>
+                                    <p className="text-[11px] text-neutral-500 truncate">{data.last_track.artist}</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Top faixas */}
+                    {data.top_tracks?.length > 0 && (
+                        <div>
+                            <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Top faixas {year}</p>
+                            <div className="space-y-1.5">
+                                {data.top_tracks.slice(0, 5).map((t, i) => (
+                                    <div key={i} className="flex items-center gap-3 p-2 rounded-xl bg-white/[0.02] border border-white/5">
+                                        <span className="text-xs font-bold text-neutral-600 w-4 text-center">{i + 1}</span>
+                                        <div className="w-8 h-8 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
+                                            {t.has_cover
+                                                ? <img src={assetUrl(`/cover/${t.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                                : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-3.5 h-3.5 text-neutral-700" /></div>}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-medium truncate">{t.title}</p>
+                                            <p className="text-[11px] text-neutral-500 truncate">{t.artist}</p>
+                                        </div>
+                                        <span className="text-xs text-neutral-500 font-mono flex-shrink-0">{t.plays}×</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Top artistas */}
+                    {data.top_artists?.length > 0 && (
+                        <div>
+                            <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Top artistas {year}</p>
+                            <div className="space-y-1.5">
+                                {data.top_artists.map((a, i) => {
+                                    const max = data.top_artists[0].plays;
+                                    const pct = Math.round((a.plays / max) * 100);
+                                    return (
+                                        <div key={i} className="flex items-center gap-3">
+                                            <span className="text-[11px] text-neutral-600 w-4 text-right">{i + 1}</span>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between mb-0.5">
+                                                    <span className="text-xs truncate">{a.artist}</span>
+                                                    <span className="text-[11px] text-neutral-500 font-mono ml-2 flex-shrink-0">{a.plays}×</span>
+                                                </div>
+                                                <div className="h-0.5 bg-white/5 rounded-full overflow-hidden">
+                                                    <div className="h-full bg-[#1DB954]/60 rounded-full" style={{ width: `${pct}%` }} />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {data && data.total_plays === 0 && (
+                <p className="text-center text-sm text-neutral-500 py-4">Sem reproduções registadas em {year}.</p>
+            )}
         </div>
     );
 }

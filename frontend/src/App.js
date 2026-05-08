@@ -49,6 +49,14 @@ export default function App() {
     const esRef = useRef(null);
     const configRef = useRef(null);
 
+    // Injectar cor de tema como CSS variable
+    useEffect(() => {
+        const c = settings.accentColor || "#1DB954";
+        document.documentElement.style.setProperty("--accent", c);
+        const r = parseInt(c.slice(1,3),16), g = parseInt(c.slice(3,5),16), b = parseInt(c.slice(5,7),16);
+        document.documentElement.style.setProperty("--accent-rgb", `${r},${g},${b}`);
+    }, [settings.accentColor]);
+
     // Manter configRef sincronizado para usar em closures SSE
     useEffect(() => { configRef.current = config; }, [config]);
 
@@ -405,6 +413,12 @@ export default function App() {
                     queue={playerQueue}
                     initialIndex={playerIndex}
                     xfadeSecs={settings.xfadeSecs ?? 3}
+                    normalizeVolume={!!settings.normalizeVolume}
+                    lastfm={settings.lastfmSessionKey ? {
+                        apiKey: settings.lastfmApiKey,
+                        apiSecret: settings.lastfmApiSecret,
+                        sessionKey: settings.lastfmSessionKey,
+                    } : null}
                     onClose={() => setPlayerQueue(null)}
                     onTrackChange={setCurrentPath}
                 />

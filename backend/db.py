@@ -246,6 +246,75 @@ def get_stats() -> dict:
     }
 
 
+def get_duplicates() -> list[dict]:
+    """Grupos de faixas com mesmo título+artista (case-insensitive)."""
+    with _conn() as con:
+        rows = con.execute("""
+            SELECT lower(title) as lt, lower(artist) as la,
+                   GROUP_CONCAT(path, '|||') as paths, COUNT(*) as cnt
+            FROM tracks GROUP BY lt, la HAVING cnt > 1 ORDER BY cnt DESC, lt
+        """).fetchall()
+        result = []
+        for row in rows:
+            paths = row["paths"].split("|||")
+            tracks = con.execute(
+                f"SELECT path,title,artist,album,duration,has_cover,play_count FROM tracks WHERE path IN ({','.join('?'*len(paths))})",
+                paths
+            ).fetchall()
+            result.append({"count": row["cnt"], "tracks": [dict(t) for t in tracks]})
+    return result
+
+
+def get_wrapped_stats(year: int) -> dict:
+    """Estatísticas anuais estilo Wrapped."""
+    start, end = f"{year}-01-01", f"{year+1}-01-01"
+    MONTHS = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+    with _conn() as con:
+        top_tracks = con.execute("""
+            SELECT t.path,t.title,t.artist,t.has_cover, COUNT(r.id) as plays
+            FROM recent_plays r JOIN tracks t ON r.path=t.path
+            WHERE r.played_at>=? AND r.played_at<? GROUP BY r.path ORDER BY plays DESC LIMIT 10
+        """, (start, end)).fetchall()
+        top_artists = con.execute("""
+            SELECT t.artist, COUNT(r.id) as plays
+            FROM recent_plays r JOIN tracks t ON r.path=t.path
+            WHERE r.played_at>=? AND r.played_at<? AND t.artist!=''
+            GROUP BY t.artist ORDER BY plays DESC LIMIT 5
+        """, (start, end)).fetchall()
+        total = con.execute("SELECT COUNT(*) as c FROM recent_plays WHERE played_at>=? AND played_at<?", (start,end)).fetchone()["c"]
+        best_month_row = con.execute("""
+            SELECT strftime('%m',played_at) as m, COUNT(*) as c FROM recent_plays
+            WHERE played_at>=? AND played_at<? GROUP BY m ORDER BY c DESC LIMIT 1
+        """, (start,end)).fetchone()
+        first = con.execute("""
+            SELECT t.title,t.artist FROM recent_plays r JOIN tracks t ON r.path=t.path
+            WHERE r.played_at>=? AND r.played_at<? ORDER BY r.played_at ASC LIMIT 1
+        """, (start,end)).fetchone()
+        last = con.execute("""
+            SELECT t.title,t.artist FROM recent_plays r JOIN tracks t ON r.path=t.path
+            WHERE r.played_at>=? AND r.played_at<? ORDER BY r.played_at DESC LIMIT 1
+        """, (start,end)).fetchone()
+    return {
+        "year": year, "total_plays": total,
+        "top_tracks": [dict(t) for t in top_tracks],
+        "top_artists": [dict(a) for a in top_artists],
+        "best_month": MONTHS[int(best_month_row["m"])-1] if best_month_row else None,
+        "first_track": dict(first) if first else None,
+        "last_track": dict(last) if last else None,
+    }
+
+
+def update_tags(path: str, title: str, artist: str, album: str) -> None:
+    with _conn() as con:
+        con.execute("UPDATE tracks SET title=?,artist=?,album=? WHERE path=?", (title, artist, album, path))
+
+
+def delete_track(path: str) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM tracks WHERE path=?", (path,))
+        con.execute("DELETE FROM recent_plays WHERE path=?", (path,))
+
+
 def get_smart_playlists() -> list[dict]:
     """Playlists geradas automaticamente a partir dos dados da biblioteca."""
     from datetime import datetime, timedelta

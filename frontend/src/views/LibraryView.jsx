@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState } from "react";
-import { Download, Heart, ListEnd, ListMusic, Mic2, MoreHorizontal, Music2, Play, RefreshCw, Disc3, ChevronDown, ChevronRight, Smartphone, WifiOff, Sparkles } from "lucide-react";
+import { AlertTriangle, Copy, Download, FileJson, FileText, Heart, ListEnd, ListMusic, Mic2, MoreHorizontal, Music2, Pencil, Play, RefreshCw, Disc3, ChevronDown, ChevronRight, Smartphone, Trash2, WifiOff, Sparkles, X } from "lucide-react";
 import axios from "axios";
 import { assetUrl } from "../utils/apiBase";
 import { PlaylistsView } from "./PlaylistsView";
@@ -27,6 +27,7 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
     const [recentTracks, setRecentTracks] = useState([]);
     const [mostPlayed, setMostPlayed] = useState([]);
     const [sortBy, setSortBy] = useState("artist");
+    const [editingTrack, setEditingTrack] = useState(null);
     const fetchedArtists = useRef(new Set());
 
     const load = async () => {
@@ -55,6 +56,30 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
             }
         }
         setLoading(false);
+    };
+
+    const exportM3U = (list) => {
+        const lines = ["#EXTM3U"];
+        list.forEach((t) => {
+            const dur = t.duration ? t.duration.split(":").reduce((a, b) => a * 60 + +b, 0) : -1;
+            lines.push(`#EXTINF:${dur},${t.artist ? t.artist + " - " : ""}${t.title}`);
+            lines.push(t.path);
+        });
+        const blob = new Blob([lines.join("\n")], { type: "audio/mpegurl" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "biblioteca.m3u";
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+    };
+
+    const exportJSON = (list) => {
+        const blob = new Blob([JSON.stringify(list, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "biblioteca.json";
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
     };
 
     useEffect(() => { load(); }, []);
@@ -115,6 +140,19 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
             <div className="space-y-4 fade-up">
                 <ModeToggle mode={mode} setMode={setMode} />
                 <SmartView onPlay={onPlay} onAddToQueue={onAddToQueue} />
+            </div>
+        );
+    }
+
+    if (mode === "duplicates") {
+        return (
+            <div className="space-y-4 fade-up">
+                <ModeToggle mode={mode} setMode={setMode} />
+                <DuplicatesView
+                    onDeleteTrack={(path) => {
+                        setTracks(prev => prev.filter(t => t.path !== path));
+                    }}
+                />
             </div>
         );
     }
@@ -181,6 +219,16 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
     // ── modo "all" ─────────────────────────────────────────────────
     return (
         <div className="space-y-4 fade-up">
+            {editingTrack && (
+                <TagEditorModal
+                    track={editingTrack}
+                    onClose={() => setEditingTrack(null)}
+                    onSaved={(updated) => {
+                        setTracks(prev => prev.map(t => t.path === updated.path ? { ...t, ...updated } : t));
+                        setEditingTrack(null);
+                    }}
+                />
+            )}
             <ModeToggle mode={mode} setMode={setMode} />
             {offline && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
@@ -207,9 +255,17 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
                         </button>
                     )}
                 </div>
-                <button onClick={load} className="p-1.5 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white transition-colors" title="Atualizar">
-                    <RefreshCw className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                    <button onClick={() => exportM3U(sorted)} title="Exportar M3U" className="p-1.5 rounded-lg hover:bg-white/5 text-neutral-500 hover:text-white transition-colors">
+                        <FileText className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => exportJSON(sorted)} title="Exportar JSON" className="p-1.5 rounded-lg hover:bg-white/5 text-neutral-500 hover:text-white transition-colors">
+                        <FileJson className="w-4 h-4" />
+                    </button>
+                    <button onClick={load} className="p-1.5 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white transition-colors" title="Atualizar">
+                        <RefreshCw className="w-4 h-4" />
+                    </button>
+                </div>
             </div>
 
             {/* Ordenação */}
@@ -253,6 +309,7 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
                                     onPlay={() => onPlay(sorted, i)}
                                     onAddToQueue={onAddToQueue ? () => onAddToQueue([track]) : null}
                                     onToggleLike={(e) => toggleLike(track.path, e)}
+                                    onEditTags={() => setEditingTrack(track)}
                                 />
                             ))}
                         </div>
@@ -292,7 +349,7 @@ function filterGroups(groups, search) {
 
 // ── Context menu ───────────────────────────────────────────────────
 
-function TrackMenu({ liked, onToggleLike, onAddToQueue, onClose, path, title, artist }) {
+function TrackMenu({ liked, onToggleLike, onAddToQueue, onClose, path, title, artist, onEditTags }) {
     const ref = useRef(null);
     const [playlists, setPlaylists] = useState([]);
     const [showPlaylists, setShowPlaylists] = useState(false);
@@ -337,6 +394,13 @@ function TrackMenu({ liked, onToggleLike, onAddToQueue, onClose, path, title, ar
                 <Heart className={`w-4 h-4 ${liked ? "fill-red-500 text-red-500" : "text-neutral-400"}`} />
                 {liked ? "Remover dos favoritos" : "Adicionar aos favoritos"}
             </button>
+            {onEditTags && (
+                <button onClick={() => { onEditTags(); onClose(); }}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-white/5 transition-colors text-left">
+                    <Pencil className="w-4 h-4 text-neutral-400" />
+                    Editar tags
+                </button>
+            )}
             <button onClick={downloadTrack}
                 className="w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-white/5 transition-colors text-left">
                 <Download className="w-4 h-4 text-neutral-400" />
@@ -558,7 +622,7 @@ function TrackRow({ track, onPlay, onAddToQueue, onToggleLike, liked, label }) {
     );
 }
 
-function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked, isPlaying }) {
+function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked, isPlaying, onEditTags }) {
     const [menuOpen, setMenuOpen] = useState(false);
 
     return (
@@ -610,7 +674,7 @@ function LibraryRow({ track, onPlay, onAddToQueue, onToggleLike, liked, isPlayin
                     <button onClick={(e) => { e.stopPropagation(); setMenuOpen(m => !m); }} className="p-1 rounded-md text-neutral-500 hover:text-white hover:bg-white/10 transition-colors">
                         <MoreHorizontal className="w-4 h-4" />
                     </button>
-                    {menuOpen && <TrackMenu liked={liked} onToggleLike={onToggleLike} onAddToQueue={onAddToQueue} onClose={() => setMenuOpen(false)} path={track.path} title={track.title} artist={track.artist} />}
+                    {menuOpen && <TrackMenu liked={liked} onToggleLike={onToggleLike} onAddToQueue={onAddToQueue} onClose={() => setMenuOpen(false)} path={track.path} title={track.title} artist={track.artist} onEditTags={onEditTags} />}
                 </div>
             </div>
         </div>
@@ -742,6 +806,148 @@ function SmartView({ onPlay, onAddToQueue }) {
     );
 }
 
+// ── Tag Editor Modal ───────────────────────────────────────────────
+
+function TagEditorModal({ track, onClose, onSaved }) {
+    const [title, setTitle] = useState(track.title || "");
+    const [artist, setArtist] = useState(track.artist || "");
+    const [album, setAlbum] = useState(track.album || "");
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+
+    const save = async () => {
+        setSaving(true);
+        setError("");
+        try {
+            await axios.patch("/library/tags", { path: track.path, title, artist, album });
+            onSaved({ path: track.path, title, artist, album });
+        } catch (e) {
+            setError(e.response?.data?.error || "Erro ao guardar");
+        }
+        setSaving(false);
+    };
+
+    return (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center px-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+            <div className="w-full max-w-sm bg-[#1a1a1a] border border-white/10 rounded-2xl shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-5">
+                    <h3 className="font-semibold text-sm">Editar tags</h3>
+                    <button onClick={onClose} className="text-neutral-500 hover:text-white transition-colors"><X className="w-4 h-4" /></button>
+                </div>
+                <div className="flex items-center gap-3 mb-4 pb-4 border-b border-white/5">
+                    <div className="w-10 h-10 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
+                        {track.has_cover
+                            ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                            : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-4 h-4 text-neutral-600" /></div>}
+                    </div>
+                    <p className="text-xs text-neutral-500 truncate">{track.path}</p>
+                </div>
+                <div className="space-y-3">
+                    {[["Título", title, setTitle], ["Artista", artist, setArtist], ["Álbum", album, setAlbum]].map(([label, val, set]) => (
+                        <div key={label}>
+                            <label className="text-xs text-neutral-500 mb-1 block">{label}</label>
+                            <input
+                                value={val}
+                                onChange={(e) => set(e.target.value)}
+                                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-neutral-600 outline-none focus:border-[#1DB954]/50 focus:ring-1 focus:ring-[#1DB954]/20 transition-all"
+                            />
+                        </div>
+                    ))}
+                </div>
+                {error && <p className="text-xs text-red-400 mt-3">{error}</p>}
+                <div className="flex gap-2 mt-5">
+                    <button onClick={onClose} className="flex-1 py-2 rounded-xl text-sm text-neutral-400 hover:text-white bg-white/5 hover:bg-white/10 transition-colors">Cancelar</button>
+                    <button onClick={save} disabled={saving} className="flex-1 py-2 rounded-xl text-sm font-medium bg-[#1DB954] text-black hover:bg-[#1ed760] disabled:opacity-50 transition-colors">
+                        {saving ? "A guardar…" : "Guardar"}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ── Duplicates View ────────────────────────────────────────────────
+
+function DuplicatesView({ onDeleteTrack }) {
+    const [groups, setGroups] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [deleting, setDeleting] = useState(null);
+
+    useEffect(() => {
+        axios.get("/library/duplicates")
+            .then((r) => setGroups(r.data.groups || []))
+            .catch(() => setGroups([]))
+            .finally(() => setLoading(false));
+    }, []);
+
+    const deleteTrack = async (path) => {
+        setDeleting(path);
+        try {
+            await axios.delete("/library/track", { params: { path } });
+            onDeleteTrack?.(path);
+            setGroups(prev => {
+                const next = prev.map(g => ({ ...g, tracks: g.tracks.filter(t => t.path !== path) }))
+                    .filter(g => g.tracks.length > 1);
+                return next;
+            });
+        } catch (_) {}
+        setDeleting(null);
+    };
+
+    if (loading) return (
+        <div className="flex items-center justify-center py-16">
+            <div className="w-6 h-6 rounded-full border-2 border-[#1DB954] border-t-transparent animate-spin" />
+        </div>
+    );
+
+    if (!groups?.length) return (
+        <div className="text-center py-16 text-neutral-500">
+            <Copy className="w-10 h-10 mx-auto mb-3 opacity-30" />
+            <p className="text-sm">Sem duplicados encontrados.</p>
+            <p className="text-xs mt-1 text-neutral-600">A biblioteca não tem faixas com o mesmo título e artista.</p>
+        </div>
+    );
+
+    return (
+        <div className="space-y-4">
+            <p className="text-xs text-neutral-500">{groups.length} {groups.length === 1 ? "grupo" : "grupos"} de duplicados</p>
+            {groups.map((g, gi) => (
+                <div key={gi} className="rounded-2xl bg-amber-500/5 border border-amber-500/15 overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                        <p className="text-xs font-medium text-amber-400">{g.count} cópias</p>
+                        <p className="text-xs text-neutral-500 truncate">— {g.tracks[0]?.title} · {g.tracks[0]?.artist}</p>
+                    </div>
+                    {g.tracks.map((t) => (
+                        <div key={t.path} className="flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.03] transition-colors">
+                            <div className="w-8 h-8 rounded-lg overflow-hidden bg-white/5 flex-shrink-0">
+                                {t.has_cover
+                                    ? <img src={assetUrl(`/cover/${t.path}`)} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
+                                    : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-3.5 h-3.5 text-neutral-700" /></div>}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium truncate">{t.title}</p>
+                                <p className="text-[11px] text-neutral-500 truncate">{t.path}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                                <span className="text-[11px] text-neutral-600 font-mono">{t.play_count || 0}×</span>
+                                <button
+                                    onClick={() => deleteTrack(t.path)}
+                                    disabled={deleting === t.path}
+                                    title="Apagar faixa"
+                                    className="p-1.5 rounded-lg text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40"
+                                >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ))}
+        </div>
+    );
+}
+
 function EmptyState() {
     return (
         <div className="text-center py-16 text-neutral-500">
@@ -754,12 +960,13 @@ function EmptyState() {
 
 function ModeToggle({ mode, setMode }) {
     const tabs = [
-        { key: "all",      label: "Todas",    short: "All",  icon: <Music2 className="w-3.5 h-3.5" /> },
-        { key: "artists",  label: "Artistas", short: "Art.", icon: <Mic2 className="w-3.5 h-3.5" /> },
-        { key: "albums",   label: "Álbuns",   short: "Álb.", icon: <Disc3 className="w-3.5 h-3.5" /> },
-        { key: "playlists",label: "Playlists",short: "PL",   icon: <ListMusic className="w-3.5 h-3.5" /> },
-        { key: "local",    label: "Local",    short: "Local",icon: <Smartphone className="w-3.5 h-3.5" /> },
-        { key: "smart",    label: "Smart",    short: "Smart",icon: <Sparkles className="w-3.5 h-3.5" /> },
+        { key: "all",        label: "Todas",    short: "All",  icon: <Music2 className="w-3.5 h-3.5" /> },
+        { key: "artists",    label: "Artistas", short: "Art.", icon: <Mic2 className="w-3.5 h-3.5" /> },
+        { key: "albums",     label: "Álbuns",   short: "Álb.", icon: <Disc3 className="w-3.5 h-3.5" /> },
+        { key: "playlists",  label: "Playlists",short: "PL",   icon: <ListMusic className="w-3.5 h-3.5" /> },
+        { key: "local",      label: "Local",    short: "Loc.", icon: <Smartphone className="w-3.5 h-3.5" /> },
+        { key: "smart",      label: "Smart",    short: "Smt", icon: <Sparkles className="w-3.5 h-3.5" /> },
+        { key: "duplicates", label: "Duplic.",  short: "Dup", icon: <Copy className="w-3.5 h-3.5" /> },
     ];
     return (
         <div className="flex gap-1 bg-white/[0.04] rounded-xl p-1 border border-white/10">

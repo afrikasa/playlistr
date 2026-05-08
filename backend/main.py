@@ -549,6 +549,186 @@ def get_smart_playlists():
     return {"playlists": _db.get_smart_playlists()}
 
 
+@app.get("/library/duplicates")
+def get_duplicates():
+    return {"groups": _db.get_duplicates()}
+
+
+@app.get("/library/wrapped")
+def get_wrapped(year: int = 0):
+    from datetime import datetime
+    return _db.get_wrapped_stats(year or datetime.utcnow().year)
+
+
+class TagsBody(BaseModel):
+    path: str
+    title: str
+    artist: str
+    album: str
+
+
+@app.patch("/library/tags")
+def update_tags(body: TagsBody):
+    from mutagen.id3 import ID3, ID3NoHeaderError, TIT2, TPE1, TALB
+    target = (_DOWNLOADS_DIR / body.path).resolve()
+    if not str(target).startswith(str(_DOWNLOADS_DIR.resolve())):
+        return Response(status_code=403)
+    if not target.exists():
+        return Response(status_code=404)
+    try:
+        try:
+            tags = ID3(str(target))
+        except ID3NoHeaderError:
+            from mutagen.id3 import ID3
+            tags = ID3()
+        tags["TIT2"] = TIT2(encoding=3, text=body.title)
+        tags["TPE1"] = TPE1(encoding=3, text=body.artist)
+        tags["TALB"] = TALB(encoding=3, text=body.album)
+        tags.save(str(target))
+    except Exception as exc:
+        log.error("Erro ao actualizar tags: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    _db.update_tags(body.path, body.title, body.artist, body.album)
+    return {"ok": True}
+
+
+@app.delete("/library/track")
+def delete_track(path: str):
+    target = (_DOWNLOADS_DIR / path).resolve()
+    if not str(target).startswith(str(_DOWNLOADS_DIR.resolve())):
+        return Response(status_code=403)
+    try:
+        if target.exists():
+            target.unlink()
+        _db.delete_track(path)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
+# ── Last.fm ──────────────────────────────────────────────────────
+import hashlib as _hashlib
+import urllib.parse as _urlparse
+
+_LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
+_lastfm_pending_token: dict = {}
+
+
+def _lastfm_sign(params: dict, secret: str) -> str:
+    sig_str = "".join(f"{k}{v}" for k, v in sorted(params.items()) if k not in ("format",))
+    return _hashlib.md5((sig_str + secret).encode()).hexdigest()
+
+
+@app.get("/lastfm/auth")
+async def lastfm_start_auth(api_key: str):
+    cb = "http://127.0.0.1:8000/lastfm/callback"
+    return RedirectResponse(f"https://www.last.fm/api/auth/?api_key={api_key}&cb={_urlparse.quote(cb, safe='')}")
+
+
+@app.get("/lastfm/callback")
+async def lastfm_callback(token: str = "", api_key: str = "", api_secret: str = ""):
+    if not token:
+        return Response("Token ausente", status_code=400)
+    _lastfm_pending_token["token"] = token
+    html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Last.fm</title>
+    <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+    .ok{color:#1DB954;font-size:1.5rem}</style></head>
+    <body><div class="ok">✓ Autorizado!</div>
+    <p>Volta à app Playlistr e clica "Confirmar ligação".</p></body></html>"""
+    return Response(content=html, media_type="text/html")
+
+
+@app.get("/lastfm/verify")
+async def lastfm_verify(api_key: str, api_secret: str):
+    token = _lastfm_pending_token.pop("token", None)
+    if not token:
+        return {"ok": False, "error": "Sem token pendente — autoriza primeiro no Last.fm"}
+    import urllib.request
+    params = {"method": "auth.getSession", "api_key": api_key, "token": token}
+    params["api_sig"] = _lastfm_sign(params, api_secret)
+    params["format"] = "json"
+    url = f"{_LASTFM_BASE}?{_urlparse.urlencode(params)}"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = json.loads(resp.read())
+        if "session" in data:
+            return {"ok": True, "session_key": data["session"]["key"], "username": data["session"]["name"]}
+        return {"ok": False, "error": data.get("message", "Erro desconhecido")}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+class ScrobbleBody(BaseModel):
+    api_key: str
+    api_secret: str
+    session_key: str
+    title: str
+    artist: str
+    timestamp: int
+
+
+@app.post("/lastfm/scrobble")
+async def lastfm_scrobble(body: ScrobbleBody):
+    import urllib.request
+    params = {
+        "method": "track.scrobble",
+        "api_key": body.api_key,
+        "sk": body.session_key,
+        "artist": body.artist,
+        "track": body.title,
+        "timestamp": str(body.timestamp),
+    }
+    params["api_sig"] = _lastfm_sign(params, body.api_secret)
+    params["format"] = "json"
+    try:
+        data_enc = _urlparse.urlencode(params).encode()
+        req = urllib.request.Request(_LASTFM_BASE, data=data_enc, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            result = json.loads(resp.read())
+        return {"ok": True, "result": result}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/lastfm/now-playing")
+async def lastfm_now_playing(body: ScrobbleBody):
+    import urllib.request
+    params = {
+        "method": "track.updateNowPlaying",
+        "api_key": body.api_key,
+        "sk": body.session_key,
+        "artist": body.artist,
+        "track": body.title,
+        "timestamp": str(body.timestamp),
+    }
+    params["api_sig"] = _lastfm_sign(params, body.api_secret)
+    params["format"] = "json"
+    try:
+        data_enc = _urlparse.urlencode(params).encode()
+        req = urllib.request.Request(_LASTFM_BASE, data=data_enc, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            json.loads(resp.read())
+        return {"ok": True}
+    except Exception:
+        return {"ok": False}
+
+
+@app.get("/lastfm/similar")
+async def lastfm_similar(artist: str, title: str, api_key: str):
+    import urllib.request
+    params = {"method": "track.getSimilar", "artist": artist, "track": title,
+              "api_key": api_key, "limit": "8", "format": "json"}
+    url = f"{_LASTFM_BASE}?{_urlparse.urlencode(params)}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Playlistr/2.3"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+        tracks = data.get("similartracks", {}).get("track", [])
+        return {"tracks": [{"title": t["name"], "artist": t["artist"]["name"]} for t in tracks]}
+    except Exception:
+        return {"tracks": []}
+
+
 def _fetch_ytdlp_tracks(url: str) -> list[dict]:
     """Extrai faixas de qualquer URL suportado pelo yt-dlp (YouTube, SoundCloud, etc.)."""
     import subprocess as _sp
