@@ -772,17 +772,32 @@ def _fetch_ytdlp_tracks(url: str) -> list[dict]:
 
 
 @app.get("/files/{path:path}")
-def serve_file(path: str):
+def serve_file(path: str, request: Request):
     target = (_DOWNLOADS_DIR / path).resolve()
     if not str(target).startswith(str(_DOWNLOADS_DIR.resolve())):
         return Response(status_code=403)
     if not target.exists() or not target.is_file():
         return Response(status_code=404)
-    return FileResponse(str(target), media_type="audio/mpeg")
+    stat = target.stat()
+    etag = f'"{int(stat.st_mtime)}-{stat.st_size}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+    return FileResponse(
+        str(target),
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "ETag": etag,
+            "Accept-Ranges": "bytes",
+        },
+    )
 
+
+# Cache em memória para capas: path → (data, mime)
+_cover_cache: dict[str, tuple[bytes, str] | None] = {}
 
 @app.get("/cover/{path:path}")
-def serve_cover(path: str):
+def serve_cover(path: str, request: Request):
     from mutagen.id3 import ID3, ID3NoHeaderError
 
     target = (_DOWNLOADS_DIR / path).resolve()
@@ -790,17 +805,35 @@ def serve_cover(path: str):
         return Response(status_code=403)
     if not target.exists():
         return Response(status_code=404)
-    try:
-        tags = ID3(str(target))
-        for key in tags.keys():
-            if key.startswith("APIC"):
-                apic = tags[key]
-                return Response(content=apic.data, media_type=apic.mime)
-    except ID3NoHeaderError:
-        pass
-    except Exception:
-        pass
-    return Response(status_code=404)
+
+    etag = f'"{int(target.stat().st_mtime)}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+
+    if path not in _cover_cache:
+        try:
+            tags = ID3(str(target))
+            found = None
+            for key in tags.keys():
+                if key.startswith("APIC"):
+                    apic = tags[key]
+                    found = (bytes(apic.data), apic.mime)
+                    break
+            _cover_cache[path] = found
+        except (ID3NoHeaderError, Exception):
+            _cover_cache[path] = None
+
+    cached = _cover_cache.get(path)
+    if not cached:
+        return Response(status_code=404)
+    return Response(
+        content=cached[0],
+        media_type=cached[1],
+        headers={
+            "Cache-Control": "public, max-age=604800",
+            "ETag": etag,
+        },
+    )
 
 
 # ── Frontend estático ────────────────────────────────────────────
