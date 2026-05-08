@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, ChevronDown, GripVertical, Heart, ListMusic, Mic2, Moon, Music2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Volume2, VolumeX, X } from "lucide-react";
+import { Activity, ChevronDown, GripVertical, Heart, ListMusic, Mic2, Moon, Music2, Pause, PictureInPicture2, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Volume2, VolumeX, X } from "lucide-react";
 import axios from "axios";
 import { extractDominantColor } from "../utils/colorExtract";
 import { assetUrl } from "../utils/apiBase";
@@ -57,6 +57,8 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     const [eqGains, setEqGains] = useState([0, 0, 0]); // bass, mid, treble (dB)
     const [showEQ, setShowEQ] = useState(false);
     const [mini, setMini] = useState(false);
+    const [pip, setPip] = useState(false);
+    const pipContainerRef = useRef(null);
     const [related, setRelated] = useState(null); // null | []
     const [showRelated, setShowRelated] = useState(false);
     const [lyrics, setLyrics] = useState(null); // null=loading, {found,lines,plain}
@@ -346,6 +348,61 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
             .catch(() => setLyrics({ found: false }));
     }, [track?.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Listener nativo para botões do PiP (click events não borbulham entre documentos)
+    useEffect(() => {
+        const el = pipContainerRef.current;
+        if (!el) return;
+        const handle = (e) => {
+            const action = e.target.closest("[data-pip]")?.dataset.pip;
+            if (action === "prev") goPrev();
+            else if (action === "play") togglePlay();
+            else if (action === "next") goNext();
+        };
+        el.addEventListener("click", handle);
+        return () => el.removeEventListener("click", handle);
+    }, [goPrev, togglePlay, goNext]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const openPip = async () => {
+        if (!("documentPictureInPicture" in window)) {
+            setMini(true); // fallback em browsers sem suporte
+            return;
+        }
+        try {
+            const pipWin = await window.documentPictureInPicture.requestWindow({
+                width: 300,
+                height: 92,
+                disallowReturnToOpener: false,
+            });
+            // Copiar todos os estilos para o novo documento
+            [...document.styleSheets].forEach((ss) => {
+                try {
+                    const text = [...ss.cssRules].map(r => r.cssText).join("");
+                    const style = pipWin.document.createElement("style");
+                    style.textContent = text;
+                    pipWin.document.head.appendChild(style);
+                } catch (_) {
+                    if (ss.href) {
+                        const link = pipWin.document.createElement("link");
+                        link.rel = "stylesheet"; link.href = ss.href;
+                        pipWin.document.head.appendChild(link);
+                    }
+                }
+            });
+            pipWin.document.body.style.cssText = "margin:0;padding:0;background:#111;overflow:hidden";
+            const el = pipContainerRef.current;
+            el.style.display = "flex";
+            pipWin.document.body.appendChild(el);
+            setPip(true);
+            pipWin.addEventListener("pagehide", () => {
+                el.style.display = "none";
+                document.body.appendChild(el); // devolver ao documento principal
+                setPip(false);
+            });
+        } catch (_) {
+            setMini(true);
+        }
+    };
+
     const handleEnded = useCallback(() => {
         if (repeat === "one") {
             const audio = audioRef.current;
@@ -508,6 +565,43 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
 
     return (
         <>
+            {/* Container PiP — sempre no DOM; movido para janela flutuante via openPip() */}
+            <div
+                ref={pipContainerRef}
+                style={{ display: "none" }}
+                className="w-full items-center gap-3 px-4 py-3"
+            >
+                <div
+                    className="w-11 h-11 rounded-xl overflow-hidden flex-shrink-0"
+                    style={{ background: accentColor ? `${accentColor}33` : "#222" }}
+                >
+                    {track?.has_cover
+                        ? <img src={assetUrl(`/cover/${track.path}`)} alt="" className="w-full h-full object-cover" />
+                        : <div className="w-full h-full flex items-center justify-center"><Music2 className="w-5 h-5 text-neutral-500" /></div>}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-white truncate leading-tight">{track?.title}</p>
+                    <p className="text-xs text-neutral-400 truncate">{track?.artist}</p>
+                    {/* Barra de progresso */}
+                    <div className="mt-1.5 h-0.5 bg-white/10 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-[width] duration-200" style={{ width: `${pct}%`, backgroundColor: accentColor || "#1DB954" }} />
+                    </div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                    <button data-pip="prev" disabled={!canPrev} className="w-8 h-8 flex items-center justify-center text-neutral-400 disabled:opacity-25 hover:text-white transition-colors">
+                        <SkipBack className="w-4 h-4 pointer-events-none" />
+                    </button>
+                    <button data-pip="play" className="w-9 h-9 rounded-full bg-white flex items-center justify-center hover:scale-105 transition-transform flex-shrink-0">
+                        {isPlaying
+                            ? <Pause className="w-4 h-4 text-black fill-black pointer-events-none" />
+                            : <Play className="w-4 h-4 text-black fill-black ml-0.5 pointer-events-none" />}
+                    </button>
+                    <button data-pip="next" disabled={!canNext} className="w-8 h-8 flex items-center justify-center text-neutral-400 disabled:opacity-25 hover:text-white transition-colors">
+                        <SkipForward className="w-4 h-4 pointer-events-none" />
+                    </button>
+                </div>
+            </div>
+
             {/* Now Playing — ecrã cheio */}
             {showNowPlaying && (
                 <NowPlaying
@@ -756,6 +850,9 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
                         <input type="range" min="0" max="1" step="0.02" value={muted ? 0 : volume}
                             onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); if (v > 0) setMuted(false); }}
                             className="hidden sm:block w-16 accent-[#1DB954] cursor-pointer" />
+                        <button onClick={openPip} title="Overlay por cima de tudo (Picture-in-Picture)" className={`transition-colors ${pip ? "text-[#1DB954]" : "text-neutral-400 hover:text-white"}`}>
+                            <PictureInPicture2 className="w-4 h-4" />
+                        </button>
                         <button onClick={() => setMini(true)} title="Mini-player" className="text-neutral-400 hover:text-white transition-colors">
                             <ChevronDown className="w-4 h-4" />
                         </button>
