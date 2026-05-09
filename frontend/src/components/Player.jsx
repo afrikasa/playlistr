@@ -90,6 +90,7 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     const normalizeNodeRef = useRef(null);
     const scrobbledRef = useRef(false); // evitar scrobble duplo por faixa
     const preloadRef = useRef(null); // elemento Audio oculto para pré-carregar a faixa seguinte
+    const lastIndexRef = useRef(-1); // índice do último track carregado — evita reload ao fazer shuffle
 
     // Normalização de volume (compressor bypass via gain)
     useEffect(() => {
@@ -167,10 +168,13 @@ export function Player({ queue, initialIndex, onClose, xfadeSecs = 3, normalizeV
     const canPrev = pos > 0 || repeat === "all";
     const canNext = pos < order.length - 1 || repeat === "all";
 
-    // Carregar e tocar faixa (com suporte a fade-in de crossfade)
+    // Carregar e tocar faixa
     useEffect(() => {
         const audio = audioRef.current;
         if (!audio || !track) return;
+        // Mesmo track (e.g. shuffle activado sem mudar de música) — não reiniciar
+        if (index === lastIndexRef.current) return;
+        lastIndexRef.current = index;
 
         // Actualizar Media Session ANTES de tocar — evita gap na notificação Android
         if ("mediaSession" in navigator) {

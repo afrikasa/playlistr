@@ -102,12 +102,17 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
         return matchSearch && (!likedOnly || likedSet.has(t.path));
     });
 
-    const sorted = [...filtered].sort((a, b) => {
+    const sortFn = (a, b) => {
         if (sortBy === "title") return (a.title || "").localeCompare(b.title || "");
         if (sortBy === "plays") return (b.play_count || 0) - (a.play_count || 0);
         if (sortBy === "recent") return (b.added_at || "").localeCompare(a.added_at || "");
         return (a.artist || "").localeCompare(b.artist || "") || (a.album || "").localeCompare(b.album || "") || (a.title || "").localeCompare(b.title || "");
-    });
+    };
+
+    const sorted = [...filtered].sort(sortFn);
+
+    // Fila completa sem filtro de pesquisa — passa ao Player para shuffle funcionar em toda a biblioteca
+    const queueAll = [...tracks].filter(t => !likedOnly || likedSet.has(t.path)).sort(sortFn);
 
     if (loading) {
         return (
@@ -306,7 +311,7 @@ export function LibraryView({ onPlay, onAddToQueue, currentPath }) {
                                     track={track}
                                     liked={likedSet.has(track.path)}
                                     isPlaying={currentPath === track.path}
-                                    onPlay={() => onPlay(sorted, i)}
+                                    onPlay={() => { const qi = queueAll.findIndex(t => t.path === track.path); onPlay(queueAll, qi >= 0 ? qi : 0); }}
                                     onAddToQueue={onAddToQueue ? () => onAddToQueue([track]) : null}
                                     onToggleLike={(e) => toggleLike(track.path, e)}
                                     onEditTags={() => setEditingTrack(track)}
