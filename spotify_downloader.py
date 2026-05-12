@@ -73,8 +73,18 @@ SP_DC                 = os.getenv("SP_DC", "")
 
 OUTPUT_DIR      = Path(__file__).parent / "downloads"  # pasta raiz de saída
 AUDIO_QUALITY   = "192"                   # kbps do MP3 final
-SEARCH_RETRIES  = 3                       # tentativas de pesquisa no YouTube
+SEARCH_RETRIES  = 2                       # tentativas por fonte
 SLEEP_BETWEEN   = 1.5                     # segundos entre downloads (cortesia)
+
+# Fontes de pesquisa em cascata (tentadas por esta ordem até encontrar resultado)
+# Valores válidos: "youtube", "soundcloud", "ytmusic"
+SEARCH_SOURCES  = ["youtube", "soundcloud", "ytmusic"]
+
+_SOURCE_PREFIXES = {
+    "youtube":    "ytsearch1:",
+    "soundcloud": "scsearch1:",
+    "ytmusic":    "ytmsearch1:",
+}
 
 def _detect_tool(env_var: str, windows_default: str, linux_cmd: str) -> str:
     """Env var > default Windows > comando no PATH (Linux/Mac)."""
@@ -529,26 +539,49 @@ def fetch_playlist_tracks(playlist_url: str) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# YouTube — pesquisa + download
+# Pesquisa multi-fonte + download
 # ═══════════════════════════════════════════════════════════════
 
-def search_youtube(query: str) -> Optional[str]:
-    """Devolve a URL do primeiro resultado de pesquisa no YouTube."""
+def _search_source(source: str, query: str) -> Optional[str]:
+    """Pesquisa numa fonte específica. Devolve URL directa ou None."""
     import subprocess, json as _json
+    prefix = _SOURCE_PREFIXES.get(source)
+    if not prefix:
+        return None
     try:
         result = subprocess.run(
             [YT_DLP_EXE, "--flat-playlist", "-j", "--no-warnings",
-             f"ytsearch1:{query}"],
+             f"{prefix}{query}"],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0 and result.stdout.strip():
             data = _json.loads(result.stdout.strip().splitlines()[0])
-            vid_id = data.get("id") or data.get("url", "").split("v=")[-1]
-            if vid_id:
+            url = data.get("webpage_url") or data.get("url")
+            if url:
+                return url
+            vid_id = data.get("id")
+            if vid_id and source in ("youtube", "ytmusic"):
                 return f"https://www.youtube.com/watch?v={vid_id}"
     except Exception as exc:
-        log.debug("search_youtube erro: %s", exc)
+        log.debug("_search_source(%s) erro: %s", source, exc)
     return None
+
+
+def search_track(artist: str, title: str) -> Optional[str]:
+    """Pesquisa em múltiplas fontes em cascata (SEARCH_SOURCES). Devolve a primeira URL encontrada."""
+    query = f"{artist} {title} audio"
+    for source in SEARCH_SOURCES:
+        url = _search_source(source, query)
+        if url:
+            log.info("  Encontrado em %s", source)
+            return url
+        log.debug("  Não encontrado em %s — a tentar próxima fonte…", source)
+    return None
+
+
+def search_youtube(query: str) -> Optional[str]:
+    """Compatibilidade — usa apenas YouTube (preferir search_track para multi-fonte)."""
+    return _search_source("youtube", query)
 
 
 def download_as_mp3(
@@ -654,19 +687,18 @@ def process_track(
         log.info("  ↩️  Já existe, a saltar.")
         return True
 
-    # 1. Usar URL pré-fornecida (import directo) ou pesquisar no YouTube
+    # 1. Usar URL pré-fornecida (import directo) ou pesquisar em múltiplas fontes
     yt_url = track.get("_yt_url") or None
     if not yt_url:
-        query = f"{artist} {title} audio"
         for attempt in range(1, SEARCH_RETRIES + 1):
-            yt_url = search_youtube(query)
+            yt_url = search_track(artist, title)
             if yt_url:
                 break
             log.warning("  Tentativa %d/%d falhou, a retentar…", attempt, SEARCH_RETRIES)
             time.sleep(2)
 
     if not yt_url:
-        log.error("  ❌  Não encontrado no YouTube: %s", f"{artist} {title}")
+        log.error("  ❌  Não encontrado em nenhuma fonte: %s", f"{artist} {title}")
         return False
 
     log.info("  🔗  %s", yt_url)
