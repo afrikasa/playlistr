@@ -1,0 +1,21 @@
+# ═════════════════════════════════════════════════════════════════
+# Storage Backends — Variáveis de Ambiente
+# ═════════════════════════════════════════════════════════════════
+
+# ── Google Drive ─────────────────────────────────────────────────
+# Obtém em: https://console.cloud.google.com
+GDRIVE_CLIENT_ID=xxx.apps.googleusercontent.com
+GDRIVE_CLIENT_SECRET=your-secret
+
+# ── Dropbox ──────────────────────────────────────────────────────
+# Obtém em: https://www.dropbox.com/developers/apps
+DROPBOX_APP_KEY=your-app-key
+DROPBOX_APP_SECRET=your-app-secret
+
+# ── OneDrive ─────────────────────────────────────────────────────
+# Obtém em: https://portal.azure.com (Entra ID)
+ONEDRIVE_CLIENT_ID=your-client-id
+
+# ── Chave de Encriptação ─────────────────────────────────────────
+# Se não definir, Playlistr gera automaticamente em ~/.playlistr/.key
+SECRET_KEY=sua-chave-secreta-32-caracteres-minimo

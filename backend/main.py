@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import threading
@@ -36,9 +37,36 @@ from spotipy import SpotifyOAuth
 # Carrega .env do diretório pai
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import spotify_downloader as sd
+import classifier as clf
 import db as _db
+from storage_manager import get_storage_manager
+from storage_backends.base import StorageConfig
+from storage_backends.gdrive import GoogleDriveBackend
+from storage_backends.dropbox_backend import DropboxBackend
+from storage_backends.onedrive import OneDriveBackend
+from storage_backends.telegram_backend import TelegramBackend
+from storage_backends.smb_sftp import SMBBackend, SFTPBackend
+
+# Para acesso aos providers
+_PROVIDER_CLASSES = {
+    "gdrive": GoogleDriveBackend,
+    "dropbox": DropboxBackend,
+    "onedrive": OneDriveBackend,
+    "telegram": TelegramBackend,
+    "smb": SMBBackend,
+    "sftp": SFTPBackend,
+}
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
 app = FastAPI(title="Spotify Downloader API")
 
@@ -155,6 +183,9 @@ async def _startup() -> None:
     _db.init_db(_DOWNLOADS_DIR / "library.db")
     threading.Thread(target=lambda: _db.scan_and_index(_DOWNLOADS_DIR), daemon=True).start()
     threading.Thread(target=_sync_scheduler_loop, daemon=True).start()
+    # Inicializar StorageManager
+    storage_mgr = get_storage_manager()
+    log.info("StorageManager inicializado com %d backends", len(storage_mgr.backends))
 
 
 # ── Modelos ──────────────────────────────────────────────────────
@@ -176,7 +207,7 @@ def _update_state(event: dict) -> None:
     if t == "track_start":
         _state["current"] = event["current"]
     elif t == "track_done":
-        s = event["status"]
+        s = event.get("status")
         if s == "done":
             _state["done"] += 1
         elif s == "failed":
@@ -249,6 +280,22 @@ def start_download(req: DownloadRequest):
         _state["status"] = "idle"
         return {"error": "Playlist vazia ou sem faixas acessíveis"}
 
+    # Enriquecer com audio features e categorias (apenas para Spotify)
+    if is_spotify:
+        try:
+            sp = _get_sp_client()
+            if sp:
+                raw_tracks = clf.enrich_with_audio_features(raw_tracks, sp)
+                log.info("Audio features e categorias adicionadas à playlist")
+            else:
+                log.warning("Cliente Spotify não disponível — categorias não serão adicionadas")
+                for track in raw_tracks:
+                    track["category"] = "unknown"
+        except Exception as exc:
+            log.warning("Erro ao classificar faixas: %s — continuando sem categorias", exc)
+            for track in raw_tracks:
+                track["category"] = "unknown"
+
     tracks = [
         {
             "id": f"t{i + 1:02d}",
@@ -257,6 +304,7 @@ def start_download(req: DownloadRequest):
             "album": t["album"],
             "cover": t.get("cover_url") or "",
             "duration": _ms_to_mmss(t.get("duration_ms")),
+            "category": t.get("category", "unknown"),
         }
         for i, t in enumerate(raw_tracks)
     ]
@@ -266,14 +314,63 @@ def start_download(req: DownloadRequest):
     _state["status"] = "downloading"
 
     def _worker() -> None:
-        sd.run_download(
-            raw_tracks=raw_tracks,
-            output_dir=Path(req.output_dir),
-            quality=req.quality,
-            cancel_event=_cancel,
-            on_event=_emit,
-            library_keys=_db.get_track_keys(),
-        )
+        # Wrapper para incluir uploads após cada faixa
+        async def _run_with_uploads():
+            mgr = get_storage_manager()
+
+            def on_event_with_uploads(event: dict) -> None:
+                if event.get("type") == "track_done" and event.get("status") == "done":
+                    # Após download bem-sucedido, fazer uploads
+                    idx = event.get("index", 0)
+                    if idx < len(raw_tracks):
+                        track = raw_tracks[idx]
+                        track_meta = {
+                            "title": track.get("title", ""),
+                            "artist": track.get("artist", ""),
+                            "album": track.get("album", ""),
+                        }
+                        # Procurar ficheiro local
+                        out_path = sd.build_output_path(
+                            track["artist"], track["album"], track["title"]
+                        )
+                        if out_path.exists():
+                            # Upload para todos os backends (assíncrono em background)
+                            def _do_uploads():
+                                try:
+                                    loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(loop)
+                                    loop.run_until_complete(
+                                        mgr.upload_to_all(out_path, track_meta)
+                                    )
+                                except Exception as exc:
+                                    log.error("Erro ao fazer uploads em background: %s", exc)
+
+                            threading.Thread(target=_do_uploads, daemon=True).start()
+
+                _emit(event)
+
+            sd.run_download(
+                raw_tracks=raw_tracks,
+                output_dir=Path(req.output_dir),
+                quality=req.quality,
+                cancel_event=_cancel,
+                on_event=on_event_with_uploads,
+                library_keys=_db.get_track_keys(),
+            )
+
+        try:
+            asyncio.run(_run_with_uploads())
+        except Exception:
+            # Fallback: correr sem uploads se houver erro
+            sd.run_download(
+                raw_tracks=raw_tracks,
+                output_dir=Path(req.output_dir),
+                quality=req.quality,
+                cancel_event=_cancel,
+                on_event=_emit,
+                library_keys=_db.get_track_keys(),
+            )
+
         _db.scan_and_index(_DOWNLOADS_DIR)
 
     threading.Thread(target=_worker, daemon=True).start()
@@ -834,6 +931,99 @@ def serve_cover(path: str, request: Request):
             "ETag": etag,
         },
     )
+
+
+# ── Storage Backends ────────────────────────────────────────────
+@app.get("/storage/providers")
+def list_storage_providers():
+    """Lista todos os storage backends configurados."""
+    mgr = get_storage_manager()
+    return {"providers": mgr.list_backends()}
+
+
+class StorageConnectRequest(BaseModel):
+    """Body para conectar/actualizar um backend."""
+    provider: str
+    name: str
+    enabled: bool = True
+    # OAuth
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    # Telegram
+    bot_token: Optional[str] = None
+    chat_id: Optional[str] = None
+    # SMB
+    smb_host: Optional[str] = None
+    smb_user: Optional[str] = None
+    smb_password: Optional[str] = None
+    smb_share: Optional[str] = None
+    smb_path: Optional[str] = None
+    # SFTP
+    sftp_host: Optional[str] = None
+    sftp_port: int = 22
+    sftp_user: Optional[str] = None
+    sftp_password: Optional[str] = None
+    sftp_key_path: Optional[str] = None
+    sftp_path: Optional[str] = None
+
+
+@app.post("/storage/providers/connect")
+async def connect_storage_provider(body: StorageConnectRequest):
+    """Conecta/actualiza um storage backend."""
+    try:
+        config = StorageConfig(**body.model_dump())
+        mgr = get_storage_manager()
+        ok = mgr.add_backend(config)
+        if not ok:
+            return {"ok": False, "error": "Erro ao adicionar backend"}
+        return {"ok": True, "display_name": _PROVIDER_CLASSES[config.provider](config).display_name}
+    except Exception as exc:
+        log.error("Erro ao conectar storage: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/storage/providers/{provider}/{name}/disconnect")
+def disconnect_storage_provider(provider: str, name: str):
+    """Desconecta um storage backend."""
+    try:
+        mgr = get_storage_manager()
+        ok = mgr.remove_backend(provider, name)
+        return {"ok": ok}
+    except Exception as exc:
+        log.error("Erro ao desconectar storage: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/storage/providers/{provider}/{name}/test")
+async def test_storage_provider(provider: str, name: str):
+    """Testa se um storage backend está conectado."""
+    try:
+        mgr = get_storage_manager()
+        ok = await mgr.test_backend(provider, name)
+        return {"ok": ok, "connected": ok}
+    except Exception as exc:
+        log.error("Erro ao testar storage: %s", exc)
+        return {"ok": False, "connected": False, "error": str(exc)}
+
+
+@app.post("/storage/providers/{provider}/{name}/authenticate")
+async def authenticate_storage_provider(provider: str, name: str):
+    """Inicia autenticação para um storage backend (OAuth)."""
+    try:
+        mgr = get_storage_manager()
+        backend_id = f"{provider}:{name}"
+        backend = mgr.backends.get(backend_id)
+        if not backend:
+            return {"ok": False, "error": "Backend não encontrado"}
+
+        # Para OAuth, o backend pode devolver uma auth_url
+        # Isto é um placeholder — a implementação real depende do provider
+        ok = await backend.authenticate()
+        return {"ok": ok, "authenticated": backend.is_connected()}
+
+    except Exception as exc:
+        log.error("Erro ao autenticar storage: %s", exc)
+        return {"ok": False, "error": str(exc)}
 
 
 # ── Frontend estático ────────────────────────────────────────────
