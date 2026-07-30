@@ -1,8 +1,9 @@
 import { StatusIcon } from "./StatusIcon";
+import { CategoryBadge } from "./CategoryBadge";
 
 export const TrackRow = ({ track, status, index, isActive }) => {
     const baseClasses =
-        "grid grid-cols-[28px_44px_1fr_auto_28px] items-center gap-4 px-3 py-2.5 rounded-xl border border-transparent transition-colors";
+        "grid grid-cols-[28px_44px_1fr_auto_auto_28px] items-center gap-4 px-3 py-2.5 rounded-xl border border-transparent transition-colors";
     const activeClasses = isActive
         ? "bg-[#1DB954]/10 border-[#1DB954]/25"
         : "hover:bg-white/[0.04] hover:border-white/5";
@@ -59,6 +60,12 @@ export const TrackRow = ({ track, status, index, isActive }) => {
                     {track.artist} · {track.album}
                 </p>
             </div>
+
+            {track.category && (
+                <div className="hidden md:inline-flex">
+                    <CategoryBadge category={track.category} />
+                </div>
+            )}
 
             <span className="text-xs text-neutral-500 font-mono tabular-nums hidden sm:inline">
                 {track.duration}

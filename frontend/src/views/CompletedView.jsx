@@ -1,4 +1,5 @@
 import { CheckCircle2, FolderOpen, RotateCcw, RefreshCw, XCircle, MinusCircle } from "lucide-react";
+import { CategoryBadge } from "@/components/CategoryBadge";
 
 const StatBlock = ({ label, value, color, testId }) => (
     <div
@@ -110,6 +111,11 @@ export const CompletedView = ({
                                         {t.artist}
                                     </p>
                                 </div>
+                                {t.category && (
+                                    <div className="hidden sm:inline-flex">
+                                        <CategoryBadge category={t.category} />
+                                    </div>
+                                )}
                                 <span className="text-[10px] uppercase tracking-wider font-bold text-red-400 px-2 py-1 rounded-full bg-red-500/10">
                                     Audio not found
                                 </span>

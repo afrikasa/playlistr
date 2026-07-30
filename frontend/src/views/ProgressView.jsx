@@ -1,5 +1,7 @@
-import { X, Disc3 } from "lucide-react";
+import { X, Disc3, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { useState } from "react";
 import { TrackRow } from "../components/TrackRow";
+import { getCategoryColor } from "@/utils/categoryColors";
 
 export const ProgressView = ({
     tracks,
@@ -7,12 +9,23 @@ export const ProgressView = ({
     activeIndex,
     progressPct,
     onCancel,
+    uploadStatuses = {}, // { trackId: { providerId: "uploading|done|failed" } }
 }) => {
+    const [categoryFilter, setCategoryFilter] = useState(null); // null = show all
+
     const total = tracks.length;
     const doneCount = Object.values(statuses).filter(
         (s) => s === "done" || s === "failed" || s === "skipped"
     ).length;
     const activeTrack = tracks[activeIndex] ?? tracks[0];
+
+    // Get unique categories from tracks
+    const uniqueCategories = Array.from(new Set(tracks.map((t) => t.category).filter(Boolean)));
+
+    // Filter tracks based on selected category
+    const filteredTracks = categoryFilter
+        ? tracks.filter((t) => t.category === categoryFilter)
+        : tracks;
 
     return (
         <div className="space-y-6 fade-up" data-testid="progress-view">
@@ -99,31 +112,99 @@ export const ProgressView = ({
                 </div>
             )}
 
+            {/* Upload status indicators — mostra quais cloud backends estão guardando */}
+            {activeTrack && uploadStatuses[activeTrack.id] && (
+                <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/10">
+                    <p className="text-xs uppercase tracking-[0.2em] font-bold text-neutral-400 mb-2.5">
+                        Cloud Sync
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                        {Object.entries(uploadStatuses[activeTrack.id]).map(([providerId, status]) => (
+                            <div
+                                key={providerId}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10"
+                            >
+                                {status === "uploading" && (
+                                    <>
+                                        <Loader2 className="w-3.5 h-3.5 text-[#1DB954] animate-spin" />
+                                        <span className="text-xs text-neutral-300">📤 {getProviderName(providerId)}</span>
+                                    </>
+                                )}
+                                {status === "done" && (
+                                    <>
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />
+                                        <span className="text-xs text-neutral-300">✓ {getProviderName(providerId)}</span>
+                                    </>
+                                )}
+                                {status === "failed" && (
+                                    <>
+                                        <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+                                        <span className="text-xs text-neutral-300">✗ {getProviderName(providerId)}</span>
+                                    </>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* Track list */}
             <div className="rounded-2xl bg-white/[0.02] border border-white/10 overflow-hidden">
                 <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
                     <span className="text-xs uppercase tracking-[0.2em] font-bold text-neutral-400">
                         Queue
                     </span>
-                    <span className="text-[11px] font-mono tabular-nums text-neutral-600">
-                        {total} items
-                    </span>
+                    <div className="flex items-center gap-2">
+                        {uniqueCategories.length > 0 && (
+                            <select
+                                value={categoryFilter || ""}
+                                onChange={(e) => setCategoryFilter(e.target.value || null)}
+                                className="text-[11px] px-2.5 py-1 rounded-md bg-white/10 border border-white/10 text-neutral-200 hover:bg-white/15 transition-colors cursor-pointer"
+                            >
+                                <option value="">Todas as categorias</option>
+                                {uniqueCategories.map((cat) => (
+                                    <option key={cat} value={cat}>
+                                        {getCategoryColor(cat).label}
+                                    </option>
+                                ))}
+                            </select>
+                        )}
+                        <span className="text-[11px] font-mono tabular-nums text-neutral-600">
+                            {filteredTracks.length} / {total} items
+                        </span>
+                    </div>
                 </div>
                 <div
                     className="thin-scroll overflow-y-auto max-h-[360px] p-2"
                     data-testid="track-list"
                 >
-                    {tracks.map((t, i) => (
-                        <TrackRow
-                            key={t.id}
-                            track={t}
-                            status={statuses[t.id] ?? "queued"}
-                            index={i}
-                            isActive={i === activeIndex}
-                        />
-                    ))}
+                    {filteredTracks.map((t, i) => {
+                        const originalIndex = tracks.indexOf(t);
+                        return (
+                            <TrackRow
+                                key={t.id}
+                                track={t}
+                                status={statuses[t.id] ?? "queued"}
+                                index={originalIndex}
+                                isActive={originalIndex === activeIndex}
+                            />
+                        );
+                    })}
                 </div>
             </div>
         </div>
     );
-};
+}
+
+// Helper para nomes de providers — pode vir de um ficheiro de constantes
+function getProviderName(providerId) {
+    const names = {
+        gdrive: "Google Drive",
+        dropbox: "Dropbox",
+        onedrive: "OneDrive",
+        telegram: "Telegram",
+        smb: "SMB",
+        sftp: "SFTP",
+    };
+    return names[providerId] || providerId;
+}

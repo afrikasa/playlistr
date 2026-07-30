@@ -2,6 +2,69 @@
 
 This file provides guidance to Claude Code ([claude.ai/code](http://claude.ai/code)) when working with code in this repository.
 
+---
+
+## DIRECTRIZES DE AGENTES — OBRIGATÓRIO LER ANTES DE QUALQUER ACÇÃO
+
+### REGRA ABSOLUTA
+
+**O Claude Code principal NÃO escreve código, NÃO corrige bugs, NÃO faz deploy.**
+Toda a implementação, correcção, revisão e deploy é feita por subagentes especializados.
+Violar esta regra — mesmo para "uma pequena alteração" — é proibido.
+
+### Sequência obrigatória para qualquer pedido de feature ou alteração
+
+```
+PASSO 1 — software-architect
+  Planeia a implementação. SEMPRE PRIMEIRO. Nunca saltar.
+
+PASSO 2 — Implementação em paralelo (conforme camadas afectadas)
+  Backend Python/FastAPI  → python-pro ou api-designer
+  Frontend React          → react-specialist ou feature-developer
+  Base de dados           → database-architect
+
+PASSO 3 — security-auditor
+  Valida segurança. SEMPRE. Mesmo em features sem auth óbvia.
+
+PASSO 4 — code-reviewer  [LOOP até APROVADO]
+  Revê código. Se BLOQUEADO → agentes corrigem → passo 3 → passo 4.
+  Não avança sem APROVADO.
+
+PASSO 5 — bug-hunter
+  Testa regressões e bugs introduzidos.
+
+PASSO 6 — devops-deployer
+  Deploy/commit/push. NUNCA sem APROVADO do code-reviewer.
+```
+
+### Agentes por tipo de trabalho neste projecto
+
+| Tipo de pedido | Agente(s) a invocar |
+|----------------|---------------------|
+| Nova feature ou alteração (backend Python/FastAPI) | `software-architect` → `python-pro` ou `api-designer` |
+| Nova feature ou alteração (frontend React) | `software-architect` → `react-specialist` |
+| Feature completa (backend + frontend) | `software-architect` → `python-pro` + `react-specialist` em paralelo |
+| Bug ou erro reportado | `bug-hunter` |
+| Erro em produção / logs | `error-detective` → `bug-hunter` |
+| Revisão de segurança | `security-auditor` |
+| Code review / "está bem?" | `code-reviewer` |
+| Deploy / commit / push | `devops-deployer` (após `code-reviewer` APROVADO) |
+| Script Python standalone | `python-pro` |
+| Componente React / shadcn / Tailwind | `react-specialist` |
+| Schema DB / migração | `database-architect` |
+
+### Formato de anúncio obrigatório antes de cada sequência
+
+Antes de lançar os agentes, anunciar em 2-3 linhas:
+```
+Plano: software-architect planeia →
+       python-pro (backend) + react-specialist (frontend) em paralelo →
+       security-auditor → code-reviewer → bug-hunter → devops-deployer.
+A começar...
+```
+
+---
+
 ## Visão Geral
 
 Descarregador de playlists Spotify como MP3 com UI React + API FastAPI.

@@ -20,6 +20,7 @@ import time
 import argparse
 import logging
 import threading
+import asyncio
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -63,6 +64,14 @@ except ImportError:
     MUTAGEN_OK = False
     print("⚠️  mutagen não encontrado — metadados ID3 serão ignorados.\n"
           "   Instala com:  pip install mutagen")
+
+# Storage backends (opcional — apenas disponível quando chamado do backend)
+try:
+    from backend.storage_manager import get_storage_manager
+    STORAGE_AVAILABLE = True
+except ImportError:
+    STORAGE_AVAILABLE = False
+    get_storage_manager = None
 
 # ──────────────────────────────────────────────
 # Configuração
@@ -129,6 +138,29 @@ def build_output_path(artist: str, album: str, title: str) -> Path:
     folder = OUTPUT_DIR / sanitize(artist) / sanitize(album)
     folder.mkdir(parents=True, exist_ok=True)
     return folder / f"{sanitize(title)}.mp3"
+
+
+def build_output_path_with_category(artist: str, album: str, title: str, category: str) -> Path:
+    """Constrói OUTPUT_DIR / Categoria / Artista / Álbum / Título.mp3"""
+    folder = OUTPUT_DIR / sanitize(category) / sanitize(artist) / sanitize(album)
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"{sanitize(title)}.mp3"
+
+
+def resolve_output_path(track: dict) -> Path:
+    """
+    Resolve o path de saída correcto para uma track, considerando categoria.
+    Usada em ambos `run_download` e `process_track` para garantir consistência.
+    """
+    artist = track["artist"]
+    album = track["album"]
+    title = track["title"]
+    category = track.get("category", "unknown")
+
+    if category and category != "unknown":
+        return build_output_path_with_category(artist, album, title, category)
+    else:
+        return build_output_path(artist, album, title)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -629,7 +661,7 @@ def download_as_mp3(
 # ═══════════════════════════════════════════════════════════════
 
 def write_id3_tags(mp3_path: Path, track: dict) -> None:
-    """Escreve tags ID3 (título, artista, álbum) e capa do álbum."""
+    """Escreve tags ID3 (título, artista, álbum, género) e capa do álbum."""
     if not MUTAGEN_OK:
         return
 
@@ -643,6 +675,11 @@ def write_id3_tags(mp3_path: Path, track: dict) -> None:
     audio["title"]  = track["title"]
     audio["artist"] = track["artist"]
     audio["album"]  = track["album"]
+    # Adicionar tag de género se category estiver disponível
+    if track.get("category"):
+        # Capitalizar a categoria para a tag ID3
+        genre_value = track["category"].replace("_", " ").title()
+        audio["genre"] = genre_value
     audio.save()
 
     # capa do álbum (APIC)
@@ -679,10 +716,12 @@ def process_track(
     title  = track["title"]
     artist = track["artist"]
     album  = track["album"]
+    category = track.get("category", "unknown")
 
     log.info("[%d/%d]  %s — %s", idx, total, artist, title)
 
-    out_path = build_output_path(artist, album, title)
+    # Usar path com categoria se disponível, caso contrário usar path tradicional
+    out_path = resolve_output_path(track)
     if out_path.exists() and not redownload:
         log.info("  ↩️  Já existe, a saltar.")
         return True
@@ -715,6 +754,71 @@ def process_track(
     return True
 
 
+def _perform_uploads(
+    out_path: Path,
+    track: dict,
+    on_event: Callable[[dict], None],
+) -> None:
+    """
+    Faz upload do ficheiro para todos os backends activos.
+    Emite eventos upload_start/upload_done, trata erros sem quebrar o fluxo.
+
+    Args:
+        out_path: Caminho local do ficheiro MP3
+        track: Metadados da faixa (title, artist, album, id)
+        on_event: Callback para emitir eventos SSE
+    """
+    if not STORAGE_AVAILABLE or not get_storage_manager:
+        return
+
+    try:
+        mgr = get_storage_manager()
+        backends = mgr.list_backends()
+
+        if not backends:
+            log.debug("Nenhum backend de armazenamento configurado")
+            return
+
+        # Filtrar backends conectados
+        active_backends = [b for b in backends if b.get("connected")]
+        if not active_backends:
+            log.debug("Nenhum backend de armazenamento conectado")
+            return
+
+        # Preparar metadados
+        track_meta = {
+            "title": track.get("title", "Unknown"),
+            "artist": track.get("artist", "Unknown"),
+            "album": track.get("album", "Unknown"),
+        }
+        track_id = track.get("id", "unknown")
+
+        # Criar event loop para chamar async code de contexto síncrono
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            # Chamar upload async
+            results = loop.run_until_complete(mgr.upload_to_all(out_path, track_meta))
+
+            # Emitir eventos de resultado
+            for backend_id, status in results.items():
+                on_event({
+                    "type": "upload_done",
+                    "track_id": track_id,
+                    "provider_id": backend_id,
+                    "status": status,
+                })
+                log.debug("Upload %s para %s: %s", track_meta.get("title"), backend_id, status)
+
+        finally:
+            loop.close()
+
+    except Exception as exc:
+        log.error("Erro ao fazer uploads: %s", exc)
+        # Não propagar excepção — upload não deve quebrar o download
+
+
 def run_download(
     raw_tracks: list,
     output_dir: Path,
@@ -736,19 +840,20 @@ def run_download(
             on_event({"type": "cancelled"})
             return
 
-        on_event({"type": "track_start", "index": idx, "current": idx + 1, "total": total})
+        category = track.get("category", "unknown")
+        on_event({"type": "track_start", "index": idx, "current": idx + 1, "total": total, "category": category})
 
         # Verificar no DB por título+artista (mais fiável que só o path)
         track_key = f"{track['title'].lower()}|{track['artist'].lower()}"
         if library_keys and track_key in library_keys:
             skipped += 1
-            on_event({"type": "track_done", "index": idx, "status": "skipped", "current": idx + 1, "total": total})
+            on_event({"type": "track_done", "index": idx, "status": "skipped", "current": idx + 1, "total": total, "category": category})
             continue
 
-        out_path = build_output_path(track["artist"], track["album"], track["title"])
+        out_path = resolve_output_path(track)
         if out_path.exists():
             skipped += 1
-            on_event({"type": "track_done", "index": idx, "status": "skipped", "current": idx + 1, "total": total})
+            on_event({"type": "track_done", "index": idx, "status": "skipped", "current": idx + 1, "total": total, "category": category})
             continue
 
         # redownload=True: existência já verificada acima
@@ -761,9 +866,14 @@ def run_download(
         status = "done" if ok else "failed"
         if ok:
             done += 1
+            # Fazer upload para backends após sucesso de download
+            # (Usar a mesma lógica de resolve_output_path)
+            out_path = resolve_output_path(track)
+
+            _perform_uploads(out_path, track, on_event)
         else:
             failed += 1
-        on_event({"type": "track_done", "index": idx, "status": status, "current": idx + 1, "total": total})
+        on_event({"type": "track_done", "index": idx, "status": status, "current": idx + 1, "total": total, "category": category})
 
         if idx < total - 1:
             time.sleep(SLEEP_BETWEEN)
@@ -796,7 +906,7 @@ def main() -> None:
 
     # Inicializa clientes
     sp     = get_spotify_client()
-    tracks = fetch_playlist_tracks(sp, args.playlist_url)
+    tracks = fetch_playlist_tracks(args.playlist_url)
 
     if not tracks:
         sys.exit("⚠️  A playlist está vazia ou não foi possível aceder.")
