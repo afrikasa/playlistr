@@ -31,6 +31,7 @@ export default function App() {
     const [tracks, setTracks] = useState([]);
     const [activeIndex, setActiveIndex] = useState(0);
     const [statuses, setStatuses] = useState({});
+    const [uploadStatuses, setUploadStatuses] = useState({}); // { trackId: { providerId: "uploading|done|failed" } }
     const [config, setConfig] = useState(null);
     const [playerQueue, setPlayerQueue] = useState(() => {
         try {
@@ -130,6 +131,24 @@ export default function App() {
                 if (id) {
                     setStatuses((prev) => ({ ...prev, [id]: event.status }));
                 }
+            } else if (event.type === "upload_start") {
+                const id = event.track_id;
+                const provider = event.provider_id;
+                if (id && provider) {
+                    setUploadStatuses((prev) => ({
+                        ...prev,
+                        [id]: { ...prev[id], [provider]: "uploading" },
+                    }));
+                }
+            } else if (event.type === "upload_done") {
+                const id = event.track_id;
+                const provider = event.provider_id;
+                if (id && provider) {
+                    setUploadStatuses((prev) => ({
+                        ...prev,
+                        [id]: { ...prev[id], [provider]: event.status },
+                    }));
+                }
             } else if (event.type === "completed") {
                 closeSSE();
                 // Guardar no histórico
@@ -174,6 +193,7 @@ export default function App() {
         setConfig(cfg);
         setTracks([]);
         setStatuses({});
+        setUploadStatuses({});
         setActiveIndex(0);
         setPhase("downloading");
 
@@ -224,12 +244,14 @@ export default function App() {
         sessionStorage.removeItem("playlistr_dl_state");
         toast.error("Download cancelled");
         setPhase("home");
+        setUploadStatuses({});
     };
 
     const handleRestart = () => {
         setPhase("home");
         setTracks([]);
         setStatuses({});
+        setUploadStatuses({});
         setActiveIndex(0);
         sessionStorage.removeItem("playlistr_dl_state");
         setTab("download");
@@ -381,6 +403,7 @@ export default function App() {
                             phase={phase}
                             tracks={tracks}
                             statuses={statuses}
+                            uploadStatuses={uploadStatuses}
                             activeIndex={activeIndex}
                             progressPct={progressPct}
                             config={config}

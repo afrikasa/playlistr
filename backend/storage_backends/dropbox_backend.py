@@ -2,70 +2,72 @@
 storage_backends/dropbox_backend.py
 ───────────────────────────────────
 Backend para Dropbox usando o SDK oficial.
+
+⚠️  DESACTIVADO TEMPORARIAMENTE — VER NOTA ABAIXO
+
+Razão da desactivação:
+- O SDK oficial `DropboxOAuth2Flow` não suporta o parâmetro `state` externo (CSRF token).
+- Incompatível com o design centralizado de validação OAuth em `oauth_state.py`.
+- gdrive.py e onedrive.py usam validação de state externa; Dropbox exigiria implementação
+  do fluxo OAuth2 à mão (sem usar DropboxOAuth2Flow).
+
+Para reactivar:
+1. Implementar fluxo OAuth2 manual (request → /authorize → callback → /token)
+2. Usar `store_oauth_state()` para guardar state antes de redirecionar
+3. Usar `validate_oauth_state()` no callback para validar
+4. Remover `_DROPBOX_OAUTH_SESSION` (hack de sessão em memória)
+5. Testar end-to-end com o callback genérico em main.py
+
+Nota de implementação original:
+Usamos DropboxOAuth2Flow (fluxo web com redirect) em vez de OAuth2FlowNoRedirect (fluxo CLI)
+porque precisamos de suporte ao parâmetro `state` para validação CSRF no callback OAuth.
+DropboxOAuth2Flow segue o padrão OAuth2 web standard usado por gdrive.py e onedrive.py.
+(Não funcionou — o SDK não suporta state externo.)
+
+Para armazenar o state entre pedidos, usamos um dicionário em memória como "sessão" fake,
+compatível com a interface que DropboxOAuth2Flow espera.
 """
 
 import asyncio
 import logging
 import os
+import sys
+import time
 from pathlib import Path
 from typing import Optional, Callable
 
 from storage_backends.base import StorageBackend, StorageConfig
 
+# Importar função de validação de OAuth state
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from oauth_state import store_oauth_state
+
 log = logging.getLogger(__name__)
+
+# Sessão fake em memória para guardar CSRF tokens entre pedidos OAuth
+# DropboxOAuth2Flow espera um objecto dict-like com __getitem__, __setitem__, etc.
+_DROPBOX_OAUTH_SESSION: dict = {}
 
 
 class DropboxBackend(StorageBackend):
-    """Backend para Dropbox com OAuth2 PKCE."""
+    """Backend para Dropbox com OAuth2 (fluxo web com redirect)."""
 
     def __init__(self, config: StorageConfig):
         super().__init__(config)
         self.client = None
+        self.pending_auth_url: Optional[str] = None  # URL para autenticação OAuth pendente
 
     async def authenticate(self) -> bool:
-        """Realiza OAuth2 com Dropbox via PKCE."""
-        try:
-            import dropbox
-            from dropbox.oauth import OAuth2FlowNoRedirect
-        except ImportError:
-            log.error("dropbox SDK não instalado: pip install dropbox")
-            return False
+        """
+        Realiza OAuth2 com Dropbox (fluxo web com redirect + state CSRF).
 
-        app_key = os.getenv("DROPBOX_APP_KEY")
-        app_secret = os.getenv("DROPBOX_APP_SECRET")
-
-        if not app_key or not app_secret:
-            log.error("DROPBOX_APP_KEY ou DROPBOX_APP_SECRET não definidos no .env")
-            return False
-
-        try:
-            # Se já tem access_token, apenas usar
-            if self.config.access_token:
-                self.client = dropbox.Dropbox(self.config.access_token)
-                try:
-                    self.client.users_get_current_account()
-                    self.connected = True
-                    log.info("Dropbox autenticado com token existente")
-                    return True
-                except Exception:
-                    log.warning("Token Dropbox inválido ou expirado")
-                    self.connected = False
-
-            # Flow OAuth novo (PKCE)
-            auth_flow = OAuth2FlowNoRedirect(
-                app_key,
-                app_secret,
-                oauth_code_grant=True,
-            )
-            authorize_url = auth_flow.get_authorize_url()
-            log.info("Dropbox auth URL: %s", authorize_url)
-            # Em produção, redirecionar utilizador para authorize_url
-            # Após obter code, guardar access_token
-            return False  # Aguardar callback
-
-        except Exception as exc:
-            log.error("Erro ao autenticar Dropbox: %s", exc)
-            return False
+        NOTA: Este método está desactivado. Ver comentário do ficheiro.
+        """
+        raise NotImplementedError(
+            "Dropbox OAuth está temporariamente indisponível. "
+            "O SDK não suporta state externo (CSRF) compatível com o design centralizado. "
+            "Ver TODO em storage_backends/dropbox_backend.py para reactivar."
+        )
 
     async def upload(
         self,
@@ -79,6 +81,8 @@ class DropboxBackend(StorageBackend):
             return False
 
         try:
+            import dropbox
+
             artist = track_meta.get("artist", "Unknown")
             album = track_meta.get("album", "Unknown")
             title = track_meta.get("title", local_path.stem)
@@ -92,7 +96,9 @@ class DropboxBackend(StorageBackend):
             with open(local_path, "rb") as f:
                 file_data = f.read()
 
-            self.client.files_upload(
+            # Envolver em asyncio.to_thread para não bloquear event loop
+            await asyncio.to_thread(
+                self.client.files_upload,
                 file_data,
                 remote_path,
                 autorename=True,
@@ -108,6 +114,16 @@ class DropboxBackend(StorageBackend):
         except Exception as exc:
             log.error("Erro ao fazer upload para Dropbox: %s", exc)
             return False
+
+    async def exchange_code_for_token(self, code: str) -> bool:
+        """Troca authorization code por access token (OAuth2 callback).
+
+        NOTA: Este método está desactivado. Ver comentário do ficheiro.
+        """
+        raise NotImplementedError(
+            "Dropbox OAuth está temporariamente indisponível. "
+            "Ver TODO em storage_backends/dropbox_backend.py para reactivar."
+        )
 
     def is_connected(self) -> bool:
         """Verifica se está conectado."""

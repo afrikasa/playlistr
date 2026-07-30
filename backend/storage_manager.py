@@ -8,7 +8,7 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, List
 
 try:
     from credentials import load_configs, add_or_update_config, remove_config
@@ -48,6 +48,15 @@ _PROVIDER_CLASSES = {
     "sftp": SFTPBackend,
 }
 
+# Providers temporariamente indisponíveis
+# Mapeia provider → razão (mensagem para mostrar ao utilizador)
+_UNAVAILABLE_PROVIDERS = {
+    "dropbox": {
+        "reason": "OAuth SDK incompatível com validação de state externa",
+        "message": "Dropbox está temporariamente indisponível. Será retomado em breve.",
+    }
+}
+
 
 class StorageManager:
     """Gestor singleton para todos os storage backends."""
@@ -64,16 +73,29 @@ class StorageManager:
         if self._initialized:
             return
         self._initialized = True
-        self.backends: dict[str, StorageBackend] = {}
+        self.backends: Dict[str, StorageBackend] = {}
         self.executor = ThreadPoolExecutor(max_workers=3)
         self._load_backends()
 
     def _load_backends(self) -> None:
-        """Carrega os backends activos de credentials.py."""
+        """Carrega os backends activos de credentials.py.
+
+        Nota: Backends em _UNAVAILABLE_PROVIDERS são ignorados durante o carregamento.
+        """
         configs = load_configs()
         for config in configs:
             if not config.enabled:
                 continue
+
+            # Saltar providers temporariamente indisponíveis
+            if config.provider in _UNAVAILABLE_PROVIDERS:
+                log.info(
+                    "Backend '%s' ignorado: %s",
+                    config.provider,
+                    _UNAVAILABLE_PROVIDERS[config.provider]["reason"]
+                )
+                continue
+
             backend_id = f"{config.provider}:{config.name}"
             try:
                 backend_class = _PROVIDER_CLASSES.get(config.provider)
@@ -159,7 +181,7 @@ class StorageManager:
         local_path: Path,
         track_meta: dict,
         progress_callback: Optional[Callable[[str, float], None]] = None,
-    ) -> dict[str, str]:
+    ) -> Dict[str, str]:
         """
         Faz upload para todos os backends activos e conectados.
 
@@ -207,9 +229,13 @@ class StorageManager:
         log.info("Uploads concluídos: %s", results)
         return results
 
-    def list_backends(self) -> list[dict]:
-        """Retorna lista de backends com informações."""
-        return [
+    def list_backends(self) -> List[Dict]:
+        """Retorna lista de backends com informações.
+
+        Inclui backends normais (carregados) e também info sobre providers
+        temporariamente indisponíveis.
+        """
+        result = [
             {
                 "id": backend_id,
                 "provider": backend.config.provider,
@@ -217,9 +243,26 @@ class StorageManager:
                 "display_name": backend.display_name,
                 "connected": backend.is_connected(),
                 "enabled": backend.config.enabled,
+                "status": "available",
             }
             for backend_id, backend in self.backends.items()
         ]
+
+        # Adicionar info sobre providers indisponíveis
+        # (para o frontend mostrar "Em breve" em vez de deixar tentar)
+        for provider, info in _UNAVAILABLE_PROVIDERS.items():
+            result.append({
+                "id": f"{provider}:unavailable",
+                "provider": provider,
+                "name": "unavailable",
+                "display_name": f"{provider.capitalize()} (indisponível)",
+                "connected": False,
+                "enabled": False,
+                "status": "unavailable",
+                "message": info["message"],
+            })
+
+        return result
 
     async def shutdown(self) -> None:
         """Encerra o gestor e fecha conexões."""

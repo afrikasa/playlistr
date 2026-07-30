@@ -88,3 +88,19 @@ class StorageBackend(ABC):
     def display_name(self) -> str:
         """Nome amigável para exibição na UI."""
         pass
+
+    async def exchange_code_for_token(self, code: str) -> bool:
+        """
+        Troca authorization code por access/refresh token (OAuth2 callback).
+
+        Implementado apenas em backends OAuth (Google Drive, Dropbox, OneDrive).
+        Levanta NotImplementedError em outros backends.
+
+        Args:
+            code: Authorization code do provider OAuth
+
+        Retorna True se sucesso, False caso contrário.
+        """
+        raise NotImplementedError(
+            f"Backend {self.__class__.__name__} não suporta OAuth code exchange"
+        )

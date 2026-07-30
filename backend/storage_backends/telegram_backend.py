@@ -61,11 +61,6 @@ class TelegramBackend(StorageBackend):
             return False
 
         try:
-            from telegram import InputFile
-        except ImportError:
-            return False
-
-        try:
             artist = track_meta.get("artist", "Unknown")
             album = track_meta.get("album", "Unknown")
             title = track_meta.get("title", local_path.stem)
@@ -76,14 +71,15 @@ class TelegramBackend(StorageBackend):
             file_size = local_path.stat().st_size
             log.info("A enviar áudio para Telegram: %s (%d bytes)", title, file_size)
 
-            # Enviar como audio
-            await self.bot.send_audio(
-                chat_id=self.config.chat_id,
-                audio=InputFile(open(local_path, "rb")),
-                caption=caption[:1024],  # limite Telegram
-                performer=artist,
-                title=title,
-            )
+            # Enviar como audio com context manager para evitar file handle leak
+            with open(local_path, "rb") as audio_file:
+                await self.bot.send_audio(
+                    chat_id=self.config.chat_id,
+                    audio=audio_file,
+                    caption=caption[:1024],  # limite Telegram
+                    performer=artist,
+                    title=title,
+                )
 
             if progress_callback:
                 progress_callback(1.0)

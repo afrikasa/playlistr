@@ -3,7 +3,7 @@ import { useState } from "react";
 import { ProgressView } from "./ProgressView";
 import { CompletedView } from "./CompletedView";
 
-export function DownloadsView({ phase, tracks, statuses, activeIndex, progressPct, config, history, onCancel, onRestart, onOpenFolder, onRetryFailed, onClearHistory }) {
+export function DownloadsView({ phase, tracks, statuses, uploadStatuses, activeIndex, progressPct, config, history, onCancel, onRestart, onOpenFolder, onRetryFailed, onClearHistory }) {
     const hasActive = phase !== "home";
 
     return (
@@ -24,6 +24,7 @@ export function DownloadsView({ phase, tracks, statuses, activeIndex, progressPc
                         <ProgressView
                             tracks={tracks}
                             statuses={statuses}
+                            uploadStatuses={uploadStatuses}
                             activeIndex={activeIndex}
                             progressPct={progressPct}
                             onCancel={onCancel}

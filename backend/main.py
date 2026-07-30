@@ -15,6 +15,7 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -49,6 +50,7 @@ from storage_backends.dropbox_backend import DropboxBackend
 from storage_backends.onedrive import OneDriveBackend
 from storage_backends.telegram_backend import TelegramBackend
 from storage_backends.smb_sftp import SMBBackend, SFTPBackend
+from oauth_state import validate_oauth_state
 
 # Para acesso aos providers
 _PROVIDER_CLASSES = {
@@ -314,62 +316,16 @@ def start_download(req: DownloadRequest):
     _state["status"] = "downloading"
 
     def _worker() -> None:
-        # Wrapper para incluir uploads após cada faixa
-        async def _run_with_uploads():
-            mgr = get_storage_manager()
-
-            def on_event_with_uploads(event: dict) -> None:
-                if event.get("type") == "track_done" and event.get("status") == "done":
-                    # Após download bem-sucedido, fazer uploads
-                    idx = event.get("index", 0)
-                    if idx < len(raw_tracks):
-                        track = raw_tracks[idx]
-                        track_meta = {
-                            "title": track.get("title", ""),
-                            "artist": track.get("artist", ""),
-                            "album": track.get("album", ""),
-                        }
-                        # Procurar ficheiro local
-                        out_path = sd.build_output_path(
-                            track["artist"], track["album"], track["title"]
-                        )
-                        if out_path.exists():
-                            # Upload para todos os backends (assíncrono em background)
-                            def _do_uploads():
-                                try:
-                                    loop = asyncio.new_event_loop()
-                                    asyncio.set_event_loop(loop)
-                                    loop.run_until_complete(
-                                        mgr.upload_to_all(out_path, track_meta)
-                                    )
-                                except Exception as exc:
-                                    log.error("Erro ao fazer uploads em background: %s", exc)
-
-                            threading.Thread(target=_do_uploads, daemon=True).start()
-
-                _emit(event)
-
-            sd.run_download(
-                raw_tracks=raw_tracks,
-                output_dir=Path(req.output_dir),
-                quality=req.quality,
-                cancel_event=_cancel,
-                on_event=on_event_with_uploads,
-                library_keys=_db.get_track_keys(),
-            )
-
-        try:
-            asyncio.run(_run_with_uploads())
-        except Exception:
-            # Fallback: correr sem uploads se houver erro
-            sd.run_download(
-                raw_tracks=raw_tracks,
-                output_dir=Path(req.output_dir),
-                quality=req.quality,
-                cancel_event=_cancel,
-                on_event=_emit,
-                library_keys=_db.get_track_keys(),
-            )
+        # Upload é agora integrado em spotify_downloader.run_download()
+        # (vide: _perform_uploads em spotify_downloader.py)
+        sd.run_download(
+            raw_tracks=raw_tracks,
+            output_dir=Path(req.output_dir),
+            quality=req.quality,
+            cancel_event=_cancel,
+            on_event=_emit,
+            library_keys=_db.get_track_keys(),
+        )
 
         _db.scan_and_index(_DOWNLOADS_DIR)
 
@@ -723,7 +679,9 @@ async def lastfm_start_auth(api_key: str):
 
 
 @app.get("/lastfm/callback")
-async def lastfm_callback(token: str = "", api_key: str = "", api_secret: str = ""):
+async def lastfm_callback(token: str = ""):
+    """Callback do Last.fm — apenas recebe o token. As credenciais da API devem ser
+    passadas no endpoint /lastfm/verify via POST + body (nunca em query params)."""
     if not token:
         return Response("Token ausente", status_code=400)
     _lastfm_pending_token["token"] = token
@@ -735,14 +693,24 @@ async def lastfm_callback(token: str = "", api_key: str = "", api_secret: str = 
     return Response(content=html, media_type="text/html")
 
 
-@app.get("/lastfm/verify")
-async def lastfm_verify(api_key: str, api_secret: str):
+class LastfmVerifyRequest(BaseModel):
+    """Request body para verificar e trocar token do Last.fm por session key."""
+    api_key: str
+    api_secret: str
+
+
+@app.post("/lastfm/verify")
+async def lastfm_verify(body: LastfmVerifyRequest):
+    """Verifica token do Last.fm e troca por session key.
+
+    SEGURANÇA: Credenciais são passadas via POST body, nunca em query params,
+    para evitar exposição em URLs, histórico do browser, e logs HTTP."""
     token = _lastfm_pending_token.pop("token", None)
     if not token:
         return {"ok": False, "error": "Sem token pendente — autoriza primeiro no Last.fm"}
     import urllib.request
-    params = {"method": "auth.getSession", "api_key": api_key, "token": token}
-    params["api_sig"] = _lastfm_sign(params, api_secret)
+    params = {"method": "auth.getSession", "api_key": body.api_key, "token": token}
+    params["api_sig"] = _lastfm_sign(params, body.api_secret)
     params["format"] = "json"
     url = f"{_LASTFM_BASE}?{_urlparse.urlencode(params)}"
     try:
@@ -934,6 +902,105 @@ def serve_cover(path: str, request: Request):
 
 
 # ── Storage Backends ────────────────────────────────────────────
+
+
+@app.get("/storage/auth/{provider}/callback")
+async def storage_oauth_callback(provider: str, code: str = None, state: str = None, error: str = None):
+    """Callback OAuth para storage backends (Google Drive, Dropbox, OneDrive).
+
+    Valida o state CSRF, troca code por token, e guarda credenciais.
+
+    SEGURANÇA: O parâmetro `error` pode vir de um redirect malicioso do provider.
+    Nunca interpolar directamente em HTML — regista em log e devolve mensagem genérica.
+    """
+    # Verificar se o provider está temporariamente indisponível
+    if provider == "dropbox":
+        log.warning("Tentativa de usar Dropbox (indisponível)")
+        html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Indisponível</title>
+        <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+        .error{color:#ff6b6b;font-size:1.5rem}</style></head>
+        <body><div class="error">✗ Serviço indisponível</div>
+        <p>Dropbox está temporariamente indisponível. Volta à app e tenta com outro serviço.</p></body></html>"""
+        return Response(content=html, media_type="text/html", status_code=501)
+
+    # Verificar se houve erro do provider
+    if error:
+        log.warning("Erro OAuth do provider %s: %s", provider, error)
+        html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Erro</title>
+        <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+        .error{color:#ff6b6b;font-size:1.5rem}</style></head>
+        <body><div class="error">✗ Autorização negada</div>
+        <p>Ocorreu um erro durante a autorização. Volta à app Playlistr e tenta novamente.</p></body></html>"""
+        return Response(content=html, media_type="text/html", status_code=400)
+
+    # Validar code e state
+    if not code or not state:
+        log.warning("Callback OAuth incompleto para %s: code=%s, state=%s", provider, bool(code), bool(state))
+        html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Erro</title>
+        <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+        .error{color:#ff6b6b;font-size:1.5rem}</style></head>
+        <body><div class="error">✗ Parâmetros incompletos</div>
+        <p>Volta à app Playlistr e tenta novamente.</p></body></html>"""
+        return Response(content=html, media_type="text/html", status_code=400)
+
+    # Validar state CSRF
+    is_valid, backend_provider, backend_name = validate_oauth_state(state, provider)
+    if not is_valid:
+        log.warning("Validação CSRF falhou para %s:%s", provider, state[:8])
+        html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Erro</title>
+        <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+        .error{color:#ff6b6b;font-size:1.5rem}</style></head>
+        <body><div class="error">✗ Verificação de segurança falhou</div>
+        <p>State inválido ou expirado. Volta à app Playlistr e tenta novamente.</p></body></html>"""
+        return Response(content=html, media_type="text/html", status_code=403)
+
+    try:
+        # Localizar backend
+        mgr = get_storage_manager()
+        backend_id = f"{provider}:{backend_name}"
+        backend = mgr.backends.get(backend_id)
+
+        if not backend:
+            log.error("Backend não encontrado: %s", backend_id)
+            html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Erro</title>
+            <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+            .error{color:#ff6b6b;font-size:1.5rem}</style></head>
+            <body><div class="error">✗ Backend não encontrado</div>
+            <p>Volta à app Playlistr e configura novamente.</p></body></html>"""
+            return Response(content=html, media_type="text/html", status_code=404)
+
+        # Trocar code por token
+        log.info("Trocando code por token para %s:%s", provider, backend_name)
+        ok = await backend.exchange_code_for_token(code)
+
+        if not ok:
+            log.error("Erro ao trocar code por token: %s:%s", provider, backend_name)
+            html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Erro</title>
+            <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+            .error{color:#ff6b6b;font-size:1.5rem}</style></head>
+            <body><div class="error">✗ Falha na autenticação</div>
+            <p>Não conseguimos completar a autenticação. Volta à app e tenta novamente.</p></body></html>"""
+            return Response(content=html, media_type="text/html", status_code=500)
+
+        # Sucesso
+        log.info("Autenticação OAuth bem-sucedida: %s:%s", provider, backend_name)
+        html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Autorizado</title>
+        <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+        .ok{color:#1DB954;font-size:1.5rem}</style></head>
+        <body><div class="ok">✓ Autorizado!</div>
+        <p>Volta à app Playlistr para confirmar a ligação.</p></body></html>"""
+        return Response(content=html, media_type="text/html")
+
+    except Exception as exc:
+        log.error("Erro no callback OAuth (%s): %s", provider, exc)
+        html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Erro</title>
+        <style>body{background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px}
+        .error{color:#ff6b6b;font-size:1.5rem}</style></head>
+        <body><div class="error">✗ Erro interno</div>
+        <p>Volta à app Playlistr e tenta novamente.</p></body></html>"""
+        return Response(content=html, media_type="text/html", status_code=500)
+
+
 @app.get("/storage/providers")
 def list_storage_providers():
     """Lista todos os storage backends configurados."""
@@ -970,6 +1037,14 @@ class StorageConnectRequest(BaseModel):
 @app.post("/storage/providers/connect")
 async def connect_storage_provider(body: StorageConnectRequest):
     """Conecta/actualiza um storage backend."""
+    # Verificar se o provider está temporariamente indisponível
+    if body.provider == "dropbox":
+        return {
+            "ok": False,
+            "error": "Dropbox está temporariamente indisponível",
+            "message": "O backend Dropbox será retomado em breve. Tente com outro serviço de armazenamento.",
+        }, 501
+
     try:
         config = StorageConfig(**body.model_dump())
         mgr = get_storage_manager()
@@ -1008,7 +1083,19 @@ async def test_storage_provider(provider: str, name: str):
 
 @app.post("/storage/providers/{provider}/{name}/authenticate")
 async def authenticate_storage_provider(provider: str, name: str):
-    """Inicia autenticação para um storage backend (OAuth)."""
+    """Inicia autenticação para um storage backend (OAuth).
+
+    Para OAuth backends, retorna a auth_url para redirecionar o utilizador.
+    Após autorização, o provider redireciona para /storage/auth/{provider}/callback.
+    """
+    # Verificar se o provider está temporariamente indisponível
+    if provider == "dropbox":
+        return {
+            "ok": False,
+            "error": "Dropbox está temporariamente indisponível",
+            "message": "O backend Dropbox será retomado em breve. Tente com outro serviço de armazenamento.",
+        }, 501
+
     try:
         mgr = get_storage_manager()
         backend_id = f"{provider}:{name}"
@@ -1016,10 +1103,24 @@ async def authenticate_storage_provider(provider: str, name: str):
         if not backend:
             return {"ok": False, "error": "Backend não encontrado"}
 
-        # Para OAuth, o backend pode devolver uma auth_url
-        # Isto é um placeholder — a implementação real depende do provider
+        # Iniciar autenticação (para OAuth, retorna False e preenche pending_auth_url)
         ok = await backend.authenticate()
-        return {"ok": ok, "authenticated": backend.is_connected()}
+
+        # Se está já autenticado (ex: token refresh bem-sucedido), retornar sucesso
+        if ok:
+            return {"ok": True, "authenticated": True}
+
+        # Se não autenticado e há auth_url pendente (OAuth flow), retornar a URL
+        if hasattr(backend, "pending_auth_url") and backend.pending_auth_url:
+            return {
+                "ok": False,
+                "authenticated": False,
+                "auth_url": backend.pending_auth_url,
+                "message": "Redirecione o utilizador para completar a autorização",
+            }
+
+        # Caso contrário, erro genérico
+        return {"ok": False, "authenticated": False, "error": "Autenticação não completada"}
 
     except Exception as exc:
         log.error("Erro ao autenticar storage: %s", exc)

@@ -6,6 +6,7 @@ Backends para SMB (Windows shares) e SFTP.
 
 import asyncio
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Optional, Callable
@@ -13,6 +14,14 @@ from typing import Optional, Callable
 from storage_backends.base import StorageBackend, StorageConfig
 
 log = logging.getLogger(__name__)
+
+
+def _sanitize_path_component(name: str) -> str:
+    """Remove caracteres que podem causar path traversal ou problemas em nomes de ficheiros."""
+    # Remover ../ e ..\\ e caracteres especiais (mesmo em SMB/SFTP)
+    name = re.sub(r'\.\.[/\\]', '', name)
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
+    return name.strip('._') or 'Unknown'
 
 
 class SMBBackend(StorageBackend):
@@ -77,9 +86,9 @@ class SMBBackend(StorageBackend):
             return False
 
         try:
-            artist = track_meta.get("artist", "Unknown")
-            album = track_meta.get("album", "Unknown")
-            title = track_meta.get("title", local_path.stem)
+            artist = _sanitize_path_component(track_meta.get("artist", "Unknown"))
+            album = _sanitize_path_component(track_meta.get("album", "Unknown"))
+            title = _sanitize_path_component(track_meta.get("title", local_path.stem))
 
             # Caminho remoto
             remote_path = f"Playlistr\\{artist}\\{album}\\{title}.mp3"
@@ -170,7 +179,12 @@ class SFTPBackend(StorageBackend):
             import paramiko
 
             self.ssh_client = paramiko.SSHClient()
-            self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            # Rejeitar hosts desconhecidos — AutoAddPolicy é vulnerável a MITM
+            self.ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            known_hosts = Path.home() / ".playlistr" / "known_hosts"
+            known_hosts.parent.mkdir(parents=True, exist_ok=True)
+            known_hosts.touch(exist_ok=True)
+            self.ssh_client.load_host_keys(str(known_hosts))
 
             # Conectar com password ou key
             if self.config.sftp_key_path:
@@ -211,9 +225,9 @@ class SFTPBackend(StorageBackend):
             return False
 
         try:
-            artist = track_meta.get("artist", "Unknown")
-            album = track_meta.get("album", "Unknown")
-            title = track_meta.get("title", local_path.stem)
+            artist = _sanitize_path_component(track_meta.get("artist", "Unknown"))
+            album = _sanitize_path_component(track_meta.get("album", "Unknown"))
+            title = _sanitize_path_component(track_meta.get("title", local_path.stem))
 
             # Caminho remoto
             base_path = self.config.sftp_path or "/music"

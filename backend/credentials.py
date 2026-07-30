@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 from cryptography.fernet import Fernet
 
@@ -33,7 +33,7 @@ def _ensure_dir() -> None:
 def _get_or_create_key() -> str:
     """
     Obtém a chave Fernet:
-    1. Se SECRET_KEY existir no .env, deriva Fernet de 32 bytes do hash
+    1. Se SECRET_KEY existir no .env, deriva Fernet de 32 bytes com salt aleatório
     2. Se não existir, gera uma chave aleatória e guarda em ~/.playlistr/.key
 
     Retorna a chave base64 codificada.
@@ -44,14 +44,22 @@ def _get_or_create_key() -> str:
     secret_key = os.getenv("SECRET_KEY")
     if secret_key:
         # Derivar Fernet key de 44 bytes (base64) de uma string arbitrária
-        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
         from cryptography.hazmat.primitives import hashes
         import base64
 
-        salt = b"playlistr-salt"  # salt fixo
-        kdf = PBKDF2(hashes.SHA256(), salt, 100000)
+        # Ler ou gerar salt
+        salt_file = _PLAYLISTR_HOME / ".salt"
+        if salt_file.exists():
+            salt = salt_file.read_bytes()
+        else:
+            salt = os.urandom(16)
+            salt_file.write_bytes(salt)
+            salt_file.chmod(0o600)
+
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000)
         key_bytes = kdf.derive(secret_key.encode())
-        key_b64 = base64.urlsafe_b64encode(key_bytes[:32])
+        key_b64 = base64.urlsafe_b64encode(key_bytes)
         return key_b64.decode()
 
     # Fallback: ler ou gerar chave em disco
@@ -72,7 +80,7 @@ def _get_cipher() -> Fernet:
     return Fernet(key.encode() if isinstance(key, str) else key)
 
 
-def load_configs() -> list[StorageConfig]:
+def load_configs() -> List[StorageConfig]:
     """Carrega e desencripta as configurações de backends."""
     _ensure_dir()
 
@@ -94,7 +102,7 @@ def load_configs() -> list[StorageConfig]:
         return []
 
 
-def save_configs(configs: list[StorageConfig]) -> None:
+def save_configs(configs: List[StorageConfig]) -> None:
     """Encripta e guarda as configurações."""
     _ensure_dir()
 
@@ -145,7 +153,7 @@ def get_config(provider: str, name: str) -> Optional[StorageConfig]:
     return None
 
 
-def list_configs_by_provider(provider: str) -> list[StorageConfig]:
+def list_configs_by_provider(provider: str) -> List[StorageConfig]:
     """Retorna todas as configs de um provider."""
     configs = load_configs()
     return [c for c in configs if c.provider == provider]

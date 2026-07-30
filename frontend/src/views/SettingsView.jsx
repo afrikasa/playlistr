@@ -1,6 +1,7 @@
-import { Settings2, Music2, Wifi, Radio, Palette, ExternalLink, Check, X } from "lucide-react";
+import { Settings2, Music2, Wifi, Radio, Palette, ExternalLink, Check, Cloud } from "lucide-react";
 import { useState } from "react";
 import axios from "axios";
+import { StorageBackendsPanel } from "../components/storage/StorageBackendsPanel";
 
 const XFADE_OPTIONS = [
     { value: 0, label: "Desligado" },
@@ -28,70 +29,59 @@ const THEME_COLORS = [
 ];
 
 export function SettingsView({ settings, onUpdate }) {
+    const [activeTab, setActiveTab] = useState("geral"); // geral | cloud
+
+    return (
+        <div className="space-y-6 fade-up">
+            {/* Tabs */}
+            <div className="flex gap-2 bg-white/[0.02] rounded-xl p-1 border border-white/5">
+                <button
+                    onClick={() => setActiveTab("geral")}
+                    className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                        activeTab === "geral"
+                            ? "bg-white/10 text-white shadow-sm"
+                            : "text-neutral-400 hover:text-white"
+                    }`}
+                >
+                    Geral
+                </button>
+                <button
+                    onClick={() => setActiveTab("cloud")}
+                    className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5 ${
+                        activeTab === "cloud"
+                            ? "bg-white/10 text-white shadow-sm"
+                            : "text-neutral-400 hover:text-white"
+                    }`}
+                >
+                    <Cloud className="w-4 h-4" />
+                    <span className="hidden sm:inline">Cloud</span>
+                </button>
+            </div>
+
+            {/* Tab: Geral */}
+            {activeTab === "geral" && (
+                <SettingsGeneralTab settings={settings} onUpdate={onUpdate} />
+            )}
+
+            {/* Tab: Cloud */}
+            {activeTab === "cloud" && (
+                <StorageBackendsPanel />
+            )}
+        </div>
+    );
+}
+
+function SettingsGeneralTab({ settings, onUpdate }) {
     const xfade = settings.xfadeSecs ?? 3;
     const quality = settings.defaultQuality || "192";
     const accent = settings.accentColor || "#1DB954";
+    const isLfmConnected = Boolean(settings.lastfmSessionKey);
     const [urlDraft, setUrlDraft] = useState(settings.serverUrl || "");
     const [testStatus, setTestStatus] = useState(null);
-    // Last.fm state
     const [lfmKey, setLfmKey] = useState(settings.lastfmApiKey || "");
     const [lfmSecret, setLfmSecret] = useState(settings.lastfmApiSecret || "");
-    const [lfmStatus, setLfmStatus] = useState(null); // null | "waiting" | "ok" | "error"
+    const [lfmStatus, setLfmStatus] = useState(null);
     const [lfmError, setLfmError] = useState("");
-
-    const saveUrl = (val) => {
-        const trimmed = val.trim();
-        setUrlDraft(trimmed);
-        onUpdate({ ...settings, serverUrl: trimmed || undefined });
-        setTestStatus(null);
-    };
-
-    const testConnection = async () => {
-        const base = (urlDraft || "").replace(/\/$/, "");
-        try {
-            const res = await fetch(`${base}/auth-status`, { signal: AbortSignal.timeout(4000) });
-            setTestStatus(res.ok ? "ok" : "erro");
-        } catch {
-            setTestStatus("erro");
-        }
-    };
-
-    const saveLastfm = (key, secret) => {
-        onUpdate({ ...settings, lastfmApiKey: key || undefined, lastfmApiSecret: secret || undefined });
-    };
-
-    const handleLastfmConnect = () => {
-        if (!lfmKey.trim()) { setLfmError("Insere a API Key primeiro"); return; }
-        saveLastfm(lfmKey.trim(), lfmSecret.trim());
-        setLfmStatus("waiting");
-        setLfmError("");
-        // Abre janela de autenticação Last.fm
-        window.open(`/lastfm/auth?api_key=${encodeURIComponent(lfmKey.trim())}`, "_blank", "width=600,height=600");
-    };
-
-    const handleLastfmVerify = async () => {
-        if (!lfmKey.trim() || !lfmSecret.trim()) { setLfmError("Insere a API Key e o Secret"); return; }
-        try {
-            const r = await axios.get("/lastfm/verify", { params: { api_key: lfmKey.trim(), api_secret: lfmSecret.trim() } });
-            if (r.data.ok) {
-                onUpdate({ ...settings, lastfmApiKey: lfmKey.trim(), lastfmApiSecret: lfmSecret.trim(), lastfmSessionKey: r.data.session_key, lastfmUsername: r.data.username });
-                setLfmStatus("ok");
-            } else {
-                setLfmError(r.data.error || "Falhou");
-                setLfmStatus("error");
-            }
-        } catch {
-            setLfmError("Erro de rede");
-            setLfmStatus("error");
-        }
-    };
-
-    const handleLastfmDisconnect = () => {
-        onUpdate({ ...settings, lastfmSessionKey: undefined, lastfmUsername: undefined });
-        setLfmStatus(null);
-    };
-
-    const isLfmConnected = !!settings.lastfmSessionKey;
 
     return (
         <div className="space-y-6 fade-up">
@@ -225,6 +215,57 @@ export function SettingsView({ settings, onUpdate }) {
             </Section>
         </div>
     );
+
+    function saveUrl(val) {
+        const trimmed = val.trim();
+        setUrlDraft(trimmed);
+        onUpdate({ ...settings, serverUrl: trimmed || undefined });
+        setTestStatus(null);
+    }
+
+    async function testConnection() {
+        const base = (urlDraft || "").replace(/\/$/, "");
+        try {
+            const res = await fetch(`${base}/auth-status`, { signal: AbortSignal.timeout(4000) });
+            setTestStatus(res.ok ? "ok" : "erro");
+        } catch {
+            setTestStatus("erro");
+        }
+    }
+
+    function saveLastfm(key, secret) {
+        onUpdate({ ...settings, lastfmApiKey: key || undefined, lastfmApiSecret: secret || undefined });
+    }
+
+    function handleLastfmConnect() {
+        if (!lfmKey.trim()) { setLfmError("Insere a API Key primeiro"); return; }
+        saveLastfm(lfmKey.trim(), lfmSecret.trim());
+        setLfmStatus("waiting");
+        setLfmError("");
+        window.open(`/lastfm/auth?api_key=${encodeURIComponent(lfmKey.trim())}`, "_blank", "width=600,height=600");
+    }
+
+    async function handleLastfmVerify() {
+        if (!lfmKey.trim() || !lfmSecret.trim()) { setLfmError("Insere a API Key e o Secret"); return; }
+        try {
+            const r = await axios.post("/lastfm/verify", { api_key: lfmKey.trim(), api_secret: lfmSecret.trim() });
+            if (r.data.ok) {
+                onUpdate({ ...settings, lastfmApiKey: lfmKey.trim(), lastfmApiSecret: lfmSecret.trim(), lastfmSessionKey: r.data.session_key, lastfmUsername: r.data.username });
+                setLfmStatus("ok");
+            } else {
+                setLfmError(r.data.error || "Falhou");
+                setLfmStatus("error");
+            }
+        } catch {
+            setLfmError("Erro de rede");
+            setLfmStatus("error");
+        }
+    }
+
+    function handleLastfmDisconnect() {
+        onUpdate({ ...settings, lastfmSessionKey: undefined, lastfmUsername: undefined });
+        setLfmStatus(null);
+    }
 }
 
 function Section({ title, icon, children }) {
