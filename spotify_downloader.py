@@ -302,8 +302,210 @@ def _get_oauth_token() -> Optional[str]:
         return None
 
 
+def _fetch_playlists_via_web_player() -> list[dict]:
+    """
+    Usa o Spotify web player (sessão do utilizador via sp_dc) para obter playlists da biblioteca.
+
+    Fase 1 — Playwright: captura o token e o hash da query GraphQL persistida (libraryV3).
+    Fase 2 — Python: faz chamadas paginadas diretas à API interna (sem UI, sem scroll).
+    Sem restrições de Extended Access, sem 403 Premium subscription errors.
+    """
+    if not SP_DC:
+        log.warning("SP_DC não configurado — não é possível usar o web player para listar playlists.")
+        return []
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        log.error("playwright não instalado")
+        return []
+
+    import json as _json
+
+    # ── Fase 1: capturar token + hash da query via Playwright ────────────────
+    captured: dict = {}
+
+    def _on_request(request: Any) -> None:
+        if "api-partner.spotify.com/pathfinder" not in request.url:
+            return
+        try:
+            body_str = request.post_data or ""
+            body_json = _json.loads(body_str) if body_str else {}
+            op = body_json.get("operationName", "")
+            if op == "libraryV3" and "hash" not in captured:
+                h = request.headers
+                captured["token"] = h.get("authorization", "").replace("Bearer ", "")
+                captured["client_token"] = h.get("client-token", "")
+                captured["app_version"] = h.get("spotify-app-version", "1.0.0.0")
+                captured["hash"] = body_json["extensions"]["persistedQuery"]["sha256Hash"]
+        except Exception:
+            pass
+
+    log.info("A capturar sessão do web player para listar playlists…")
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context()
+            ctx.add_cookies([{
+                "name": "sp_dc", "value": SP_DC,
+                "domain": ".spotify.com", "path": "/",
+                "secure": True, "httpOnly": True,
+            }])
+            page = ctx.new_page()
+            page.on("request", _on_request)
+            page.goto(
+                "https://open.spotify.com/collection/playlists",
+                timeout=30_000,
+                wait_until="networkidle",
+            )
+            # Aguardar até capturar ou timeout
+            for _ in range(30):
+                if "hash" in captured:
+                    break
+                page.wait_for_timeout(500)
+            page.wait_for_timeout(1_000)
+            browser.close()
+    except Exception as exc:
+        log.error("Erro Playwright: %s", exc)
+        return []
+
+    if not captured.get("token") or not captured.get("hash"):
+        log.error("Não foi possível capturar token/hash do web player para libraryV3.")
+        return []
+
+    log.info("Token e hash capturados — a paginar playlists via API interna…")
+
+    # ── Fase 2: chamadas POST paginadas diretas à API interna ───────────────
+    api_token = captured["token"]
+    sha_hash = captured["hash"]
+    req_headers = {
+        "Authorization": f"Bearer {api_token}",
+        "client-token": captured.get("client_token", ""),
+        "spotify-app-version": captured.get("app_version", "1.0.0.0"),
+        "App-Platform": "WebPlayer",
+        "Content-Type": "application/json;charset=UTF-8",
+        "Accept": "application/json",
+        "Accept-Language": "en",
+        "Referer": "https://open.spotify.com/",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+    }
+
+    playlists: list[dict] = []
+    offset = 0
+    page_size = 50
+    api_url = "https://api-partner.spotify.com/pathfinder/v2/query"
+
+    while True:
+        body = {
+            "variables": {
+                "order": None,
+                "textFilter": "",
+                "features": ["LIKED_SONGS", "YOUR_EPISODES_V2", "PRERELEASES", "PRERELEASES_V2", "CLIPS", "EVENTS"],
+                "limit": page_size,
+                "offset": offset,
+                "flatten": False,
+                "expandedFolders": [],
+                "folderUri": None,
+                "includeFoldersWhenFlattening": True,
+            },
+            "operationName": "libraryV3",
+            "extensions": {
+                "persistedQuery": {"version": 1, "sha256Hash": sha_hash},
+            },
+        }
+        try:
+            r = _req.post(api_url, headers=req_headers, json=body, timeout=15)
+            if r.status_code != 200:
+                log.error("API interna retornou %d: %s", r.status_code, r.text[:200])
+                break
+            data = r.json()
+            lib_data = data.get("data", {}).get("me", {}).get("libraryV3", {})
+            items = lib_data.get("items", [])
+            if not items:
+                break
+
+            for item in items:
+                # Filtrar apenas playlists (não Liked Songs, Albums, etc.)
+                wrapper_type = item.get("item", {}).get("__typename", "")
+                if wrapper_type != "PlaylistResponseWrapper":
+                    continue
+
+                p_data = item.get("item", {}).get("data", {})
+                if not p_data:
+                    continue
+
+                name = p_data.get("name", "")
+                uri = p_data.get("uri", "")
+                if not name or not uri:
+                    continue
+
+                # Extrair ID da URI (spotify:playlist:ID)
+                playlist_id = uri.split(":")[-1] if ":" in uri else ""
+                if not playlist_id:
+                    continue
+
+                # Extrair imagem (images.items[].sources[])
+                image_url = None
+                images_items = p_data.get("images", {}).get("items", [])
+                if images_items:
+                    # Procurar pela imagem de tamanho 300 em primeiro lugar
+                    for img in images_items:
+                        sources = img.get("sources", [])
+                        for src in sources:
+                            if src.get("width") == 300:
+                                image_url = src.get("url")
+                                break
+                        if image_url:
+                            break
+                    # Fallback: usar a primeira fonte disponível
+                    if not image_url and images_items:
+                        sources = images_items[0].get("sources", [])
+                        if sources:
+                            image_url = sources[0].get("url")
+
+                # Nº de faixas: libraryV3 não retorna esta info para playlists normais
+                # (apenas para pseudo-playlists como Liked Songs).
+                # Deixar como 0 — o frontend pode fazer fetch completo se necessário.
+                total = p_data.get("count", 0)
+
+                # URL da playlist (reconstruir a partir da URI)
+                playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+
+                playlists.append({
+                    "id":    playlist_id,
+                    "name":  name,
+                    "total": total,
+                    "url":   playlist_url,
+                    "image": image_url,
+                })
+
+            total_count = lib_data.get("content", {}).get("totalCount", 0)
+            offset += len(items)
+            log.info("  %d playlists carregadas…", len(playlists))
+            if offset >= total_count or not items:
+                break
+        except Exception as exc:
+            log.error("Erro ao paginar playlists: %s", exc)
+            break
+
+    log.info("✅  %d playlists obtidas via web player.", len(playlists))
+    return playlists
+
+
 def fetch_user_playlists() -> list[dict]:
-    """Devolve as playlists do utilizador autenticado via OAuth token."""
+    """Devolve as playlists do utilizador autenticado."""
+    # Método principal: web player GraphQL (sem restrições de Premium)
+    if SP_DC:
+        playlists = _fetch_playlists_via_web_player()
+        if playlists:
+            return playlists
+        log.warning("Web player não devolveu playlists — a tentar API pública…")
+
+    # Fallback: API pública com OAuth token (pode ter restrições)
     token = _get_oauth_token() or _get_web_player_token()
     if not token:
         return []

@@ -181,9 +181,11 @@ export const HomeView = ({ onStart }) => {
                                             />
                                         )}
                                         <span className="truncate">{p.name}</span>
-                                        <span className="text-neutral-500 shrink-0 text-xs">
-                                            {p.total} faixas
-                                        </span>
+                                        {p.total > 0 && (
+                                            <span className="text-neutral-500 shrink-0 text-xs">
+                                                {p.total} faixas
+                                            </span>
+                                        )}
                                     </span>
                                 </SelectItem>
                             ))}
